@@ -1,0 +1,28 @@
+[package]
+name = "aivyx-crypto"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+aivyx-core = { workspace = true }
+secrecy = { workspace = true }
+argon2 = { workspace = true }
+chacha20poly1305 = { workspace = true }
+zeroize = { workspace = true }
+rand = { workspace = true }
+redb = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hkdf = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+uuid = { workspace = true }
+
+[[bench]]
+name = "encrypt_decrypt"
+harness = false

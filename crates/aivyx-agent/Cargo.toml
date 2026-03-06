@@ -1,0 +1,54 @@
+[package]
+name = "aivyx-agent"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+aivyx-core = { workspace = true }
+aivyx-llm = { workspace = true }
+aivyx-capability = { workspace = true }
+aivyx-audit = { workspace = true }
+aivyx-config = { workspace = true }
+aivyx-crypto = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+secrecy = { workspace = true }
+toml = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+reqwest = { workspace = true }
+urlencoding = { workspace = true }
+html2text = { workspace = true }
+futures-util = { workspace = true }
+tokio-util = { workspace = true }
+regex = { workspace = true }
+glob = { workspace = true }
+csv = { workspace = true }
+serde_yaml = { workspace = true }
+sha2 = { workspace = true }
+calamine = { workspace = true }
+pdf-extract = { workspace = true }
+plotters = { workspace = true }
+tera = { workspace = true }
+pulldown-cmark = { workspace = true }
+hex = { workspace = true }
+scraper = { workspace = true }
+lettre = { workspace = true }
+rusqlite = { workspace = true }
+zip = { workspace = true }
+diffy = { workspace = true }
+tar = { workspace = true }
+flate2 = { workspace = true }
+aivyx-memory = { workspace = true, optional = true }
+aivyx-mcp = { workspace = true, optional = true }
+aivyx-federation = { workspace = true, optional = true }
+
+[features]
+default = ["memory", "mcp"]
+memory = ["dep:aivyx-memory"]
+mcp = ["dep:aivyx-mcp"]
+federation = ["dep:aivyx-federation"]

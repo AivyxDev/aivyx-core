@@ -1,0 +1,124 @@
+[workspace]
+members = [
+    "crates/aivyx-core",
+    "crates/aivyx-crypto",
+    "crates/aivyx-config",
+    "crates/aivyx-audit",
+    "crates/aivyx-capability",
+    "crates/aivyx-llm",
+    "crates/aivyx-mcp",
+    "crates/aivyx-memory",
+    "crates/aivyx-agent",
+    "crates/aivyx-federation",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+repository = "https://github.com/AivyxDev/aivyx-core"
+description = "Shared foundation crates for the Aivyx ecosystem"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+
+# IDs & errors
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+
+# Crypto
+secrecy = { version = "0.10", features = ["serde"] }
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+zeroize = { version = "1", features = ["derive"] }
+rand = "0.8"
+hkdf = "0.12"
+
+# Storage
+redb = "2"
+
+# Audit
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+subtle = "2"
+ed25519-dalek = { version = "2", features = ["serde", "rand_core"] }
+base64 = "0.22"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures-util = "0.3"
+
+# HTTP
+reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
+tokio-stream = "0.1"
+tokio-util = "0.7"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# HTML processing
+html2text = "0.12"
+urlencoding = "2"
+
+# Testing
+proptest = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Rate limiting
+governor = "0.8"
+
+# Data processing
+csv = "1"
+
+# Document intelligence
+calamine = { version = "0.26", features = ["dates"] }
+pdf-extract = "0.7"
+plotters = { version = "0.3", default-features = false, features = ["svg_backend", "line_series", "point_series"] }
+tera = "1"
+pulldown-cmark = "0.12"
+
+# Network & communication
+scraper = "0.22"
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "hostname", "builder"] }
+
+# Infrastructure
+rusqlite = { version = "0.32", features = ["bundled"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+diffy = "0.4"
+
+# Pattern matching
+glob = "0.3"
+regex = "1"
+
+# Archiving
+tar = "0.4"
+flate2 = "1"
+
+# Cron scheduling
+croner = "2"
+
+# CLI (used by config crate)
+dirs = "6"
+
+# Internal crates
+aivyx-core = { path = "crates/aivyx-core" }
+aivyx-crypto = { path = "crates/aivyx-crypto" }
+aivyx-capability = { path = "crates/aivyx-capability" }
+aivyx-audit = { path = "crates/aivyx-audit" }
+aivyx-config = { path = "crates/aivyx-config" }
+aivyx-llm = { path = "crates/aivyx-llm" }
+aivyx-mcp = { path = "crates/aivyx-mcp" }
+aivyx-memory = { path = "crates/aivyx-memory" }
+aivyx-agent = { path = "crates/aivyx-agent" }
+aivyx-federation = { path = "crates/aivyx-federation" }
