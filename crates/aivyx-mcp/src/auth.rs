@@ -330,9 +330,11 @@ mod tests {
             metadata.authorization_endpoint,
             "https://auth.example.com/authorize"
         );
-        assert!(metadata
-            .code_challenge_methods_supported
-            .contains(&"S256".to_string()));
+        assert!(
+            metadata
+                .code_challenge_methods_supported
+                .contains(&"S256".to_string())
+        );
     }
 
     #[test]
@@ -347,9 +349,6 @@ mod tests {
             client.authorization_endpoint(),
             "https://auth.example.com/authorize"
         );
-        assert_eq!(
-            client.token_endpoint(),
-            "https://auth.example.com/token"
-        );
+        assert_eq!(client.token_endpoint(), "https://auth.example.com/token");
     }
 }

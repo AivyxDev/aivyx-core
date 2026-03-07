@@ -807,7 +807,10 @@ mod tests {
         assert_eq!(tenants.default_quotas.max_sessions_per_day, Some(100));
         assert_eq!(tenants.default_quotas.max_storage_mb, Some(512));
         assert_eq!(tenants.default_quotas.max_llm_tokens_per_day, Some(50000));
-        assert_eq!(tenants.default_quotas.max_llm_tokens_per_month, Some(1_000_000));
+        assert_eq!(
+            tenants.default_quotas.max_llm_tokens_per_month,
+            Some(1_000_000)
+        );
     }
 
     #[test]
@@ -852,7 +855,10 @@ mod tests {
         assert_eq!(tenants.default_quotas.max_agents, Some(5));
         assert!(tenants.default_quotas.max_sessions_per_day.is_none());
         assert_eq!(tenants.default_quotas.max_storage_mb, Some(1024));
-        assert_eq!(tenants.default_quotas.max_llm_tokens_per_month, Some(500_000));
+        assert_eq!(
+            tenants.default_quotas.max_llm_tokens_per_month,
+            Some(500_000)
+        );
         std::fs::remove_file(&path).ok();
     }
 
@@ -903,8 +909,8 @@ mod tests {
             enabled: true,
         }];
 
-        let path = std::env::temp_dir()
-            .join(format!("aivyx-cfg-triggers-{}.toml", rand::random::<u64>()));
+        let path =
+            std::env::temp_dir().join(format!("aivyx-cfg-triggers-{}.toml", rand::random::<u64>()));
         config.save(&path).unwrap();
         let loaded = AivyxConfig::load(&path).unwrap();
         assert_eq!(loaded.triggers.len(), 1);
@@ -962,8 +968,8 @@ mod tests {
             alert_webhook: None,
         });
 
-        let path = std::env::temp_dir()
-            .join(format!("aivyx-cfg-billing-{}.toml", rand::random::<u64>()));
+        let path =
+            std::env::temp_dir().join(format!("aivyx-cfg-billing-{}.toml", rand::random::<u64>()));
         config.save(&path).unwrap();
         let loaded = AivyxConfig::load(&path).unwrap();
         let billing = loaded.billing.unwrap();
@@ -1033,8 +1039,8 @@ mod tests {
             }],
         });
 
-        let path = std::env::temp_dir()
-            .join(format!("aivyx-cfg-sso-{}.toml", rand::random::<u64>()));
+        let path =
+            std::env::temp_dir().join(format!("aivyx-cfg-sso-{}.toml", rand::random::<u64>()));
         config.save(&path).unwrap();
         let loaded = AivyxConfig::load(&path).unwrap();
         let sso = loaded.sso.unwrap();

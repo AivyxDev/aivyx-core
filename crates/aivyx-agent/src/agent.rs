@@ -823,11 +823,14 @@ impl Agent {
                         200,
                     ),
                 });
-                (ToolResult {
-                    tool_call_id: tc.id.clone(),
-                    content: output,
-                    is_error: false,
-                }, false)
+                (
+                    ToolResult {
+                        tool_call_id: tc.id.clone(),
+                        content: output,
+                        is_error: false,
+                    },
+                    false,
+                )
             }
             Err(e) => {
                 self.audit_event(AuditEvent::ToolDenied {
@@ -836,11 +839,14 @@ impl Agent {
                     action: tc.name.clone(),
                     reason: e.to_string(),
                 });
-                (ToolResult {
-                    tool_call_id: tc.id.clone(),
-                    content: serde_json::json!({"error": e.to_string()}),
-                    is_error: true,
-                }, true)
+                (
+                    ToolResult {
+                        tool_call_id: tc.id.clone(),
+                        content: serde_json::json!({"error": e.to_string()}),
+                        is_error: true,
+                    },
+                    true,
+                )
             }
         };
 

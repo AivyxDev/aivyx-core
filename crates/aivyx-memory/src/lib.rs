@@ -23,11 +23,11 @@ pub use manager::{MemoryManager, MemoryStats};
 pub use notification::{Notification, NotificationStore, Rating};
 pub use outcome::{OutcomeFilter, OutcomeRecord, OutcomeSource};
 pub use profile::{PROFILE_VERSION, ProjectEntry, RecurringTask, UserProfile};
-pub use search::{SearchResult, VectorIndex, content_hash, cosine_similarity};
 pub use retrieval::{
     Attribution, RetrievalResult, RetrievalRouter, RetrievalSource, RetrievalStrategy,
     SynthesisResult,
 };
+pub use search::{SearchResult, VectorIndex, content_hash, cosine_similarity};
 pub use store::MemoryStore;
 pub use tools::register_memory_tools;
 pub use types::{KnowledgeTriple, MemoryAttachment, MemoryEntry, MemoryKind};

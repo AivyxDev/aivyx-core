@@ -42,21 +42,14 @@ impl TtsProvider for EdgeTtsProvider {
         "edge-tts"
     }
 
-    async fn synthesize(
-        &self,
-        text: &str,
-        options: &TtsOptions,
-    ) -> Result<TtsOutput> {
+    async fn synthesize(&self, text: &str, options: &TtsOptions) -> Result<TtsOutput> {
         // edge-tts outputs MP3 by default. We always request MP3 and note
         // the format in the output.
         let output_format = TtsAudioFormat::Mp3;
 
         // Create a temp file for the output
         let temp_dir = std::env::temp_dir();
-        let output_path = temp_dir.join(format!(
-            "aivyx-tts-{}.mp3",
-            uuid::Uuid::new_v4()
-        ));
+        let output_path = temp_dir.join(format!("aivyx-tts-{}.mp3", uuid::Uuid::new_v4()));
 
         let mut cmd = Command::new("edge-tts");
         cmd.arg("--voice")
@@ -78,18 +71,13 @@ impl TtsProvider for EdgeTtsProvider {
             cmd.arg("--rate").arg(rate_str);
         }
 
-        let output = cmd
-            .output()
-            .await
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    AivyxError::Config(
-                        "edge-tts not found. Install with: pip install edge-tts".into(),
-                    )
-                } else {
-                    AivyxError::Other(format!("edge-tts execution failed: {e}"))
-                }
-            })?;
+        let output = cmd.output().await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                AivyxError::Config("edge-tts not found. Install with: pip install edge-tts".into())
+            } else {
+                AivyxError::Other(format!("edge-tts execution failed: {e}"))
+            }
+        })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

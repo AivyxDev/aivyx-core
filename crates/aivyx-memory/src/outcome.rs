@@ -39,24 +39,13 @@ pub struct OutcomeRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OutcomeSource {
     /// A mission step (task_id + step_index).
-    MissionStep {
-        task_id: TaskId,
-        step_index: usize,
-    },
+    MissionStep { task_id: TaskId, step_index: usize },
     /// A tool invocation.
-    ToolCall {
-        tool_name: String,
-    },
+    ToolCall { tool_name: String },
     /// A team delegation.
-    Delegation {
-        specialist: String,
-        task: String,
-    },
+    Delegation { specialist: String, task: String },
     /// A specialist suggestion that was followed.
-    SpecialistSuggestion {
-        suggested: String,
-        chosen: String,
-    },
+    SpecialistSuggestion { suggested: String, chosen: String },
 }
 
 impl OutcomeRecord {

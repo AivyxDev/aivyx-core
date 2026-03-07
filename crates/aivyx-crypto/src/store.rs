@@ -375,7 +375,8 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn temp_backend() -> (EncryptedBackend, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!("aivyx-backend-test-{}", rand::random::<u64>()));
+        let dir =
+            std::env::temp_dir().join(format!("aivyx-backend-test-{}", rand::random::<u64>()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("backend.redb");
         let key = MasterKey::generate();

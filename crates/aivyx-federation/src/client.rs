@@ -211,10 +211,7 @@ impl FederationClient {
     }
 
     /// Get the trust policy for a specific peer, if configured.
-    pub async fn peer_trust_policy(
-        &self,
-        peer_id: &str,
-    ) -> Option<crate::config::TrustPolicy> {
+    pub async fn peer_trust_policy(&self, peer_id: &str) -> Option<crate::config::TrustPolicy> {
         let peers = self.peers.read().await;
         peers
             .get(peer_id)
@@ -254,7 +251,10 @@ impl FederationClient {
             .then_with(|| a.config.id.cmp(&b.config.id))
         });
 
-        candidates.into_iter().map(|p| p.config.id.clone()).collect()
+        candidates
+            .into_iter()
+            .map(|p| p.config.id.clone())
+            .collect()
     }
 
     /// Mark a peer as unhealthy.
@@ -327,12 +327,8 @@ mod tests {
             make_peer("peer-a", vec!["chat"]),
             make_peer("peer-b", vec!["chat"]),
         ]);
-        client
-            .set_peer_healthy("peer-a", true, vec![])
-            .await;
-        client
-            .set_peer_healthy("peer-b", true, vec![])
-            .await;
+        client.set_peer_healthy("peer-a", true, vec![]).await;
+        client.set_peer_healthy("peer-b", true, vec![]).await;
 
         let selected = client.select_peer("chat").await;
         assert!(selected.is_some());

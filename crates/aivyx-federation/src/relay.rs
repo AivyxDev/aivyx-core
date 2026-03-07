@@ -125,7 +125,9 @@ impl FederationClient {
         req: &RelayChatRequest,
         capability: &str,
     ) -> Result<RelayChatResponse, AivyxError> {
-        let candidates = self.build_failover_candidates(&req.peer_id, capability).await;
+        let candidates = self
+            .build_failover_candidates(&req.peer_id, capability)
+            .await;
 
         let mut last_error = AivyxError::Other("no failover candidates available".into());
 
@@ -157,7 +159,9 @@ impl FederationClient {
         req: &RelayTaskRequest,
         capability: &str,
     ) -> Result<RelayTaskResponse, AivyxError> {
-        let candidates = self.build_failover_candidates(&req.peer_id, capability).await;
+        let candidates = self
+            .build_failover_candidates(&req.peer_id, capability)
+            .await;
 
         let mut last_error = AivyxError::Other("no failover candidates available".into());
 

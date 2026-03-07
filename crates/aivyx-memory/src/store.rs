@@ -154,22 +154,13 @@ impl MemoryStore {
     // -----------------------------------------------------------------------
 
     /// Save binary attachment data (e.g., an image associated with a memory).
-    pub fn save_attachment(
-        &self,
-        id: &str,
-        data: &[u8],
-        master_key: &MasterKey,
-    ) -> Result<()> {
+    pub fn save_attachment(&self, id: &str, data: &[u8], master_key: &MasterKey) -> Result<()> {
         let key = format!("attach:{id}");
         self.store.put(&key, data, master_key)
     }
 
     /// Load binary attachment data by ID.
-    pub fn load_attachment(
-        &self,
-        id: &str,
-        master_key: &MasterKey,
-    ) -> Result<Option<Vec<u8>>> {
+    pub fn load_attachment(&self, id: &str, master_key: &MasterKey) -> Result<Option<Vec<u8>>> {
         let key = format!("attach:{id}");
         self.store.get(&key, master_key)
     }

@@ -4,7 +4,7 @@ use aivyx_core::a2a::{
     A2aArtifact, A2aMessage, A2aPart, A2aRole, A2aTask, A2aTaskState, A2aTaskStatus,
     AgentCapabilities, AgentCard, JsonRpcRequest, JsonRpcResponse, TaskStatusUpdateEvent,
 };
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 fn sample_jsonrpc_request() -> JsonRpcRequest {
     JsonRpcRequest {
@@ -91,16 +91,15 @@ fn bench_jsonrpc_request(c: &mut Criterion) {
 fn bench_jsonrpc_response(c: &mut Criterion) {
     let mut group = c.benchmark_group("jsonrpc_response");
 
-    let success = JsonRpcResponse::success(serde_json::json!(1), serde_json::json!({"status": "ok"}));
+    let success =
+        JsonRpcResponse::success(serde_json::json!(1), serde_json::json!({"status": "ok"}));
     let success_json = serde_json::to_string(&success).unwrap();
 
     group.bench_function("success_serialize", |b| {
         b.iter(|| black_box(serde_json::to_string(&success).unwrap()));
     });
     group.bench_function("success_deserialize", |b| {
-        b.iter(|| {
-            black_box(serde_json::from_str::<JsonRpcResponse>(&success_json).unwrap())
-        });
+        b.iter(|| black_box(serde_json::from_str::<JsonRpcResponse>(&success_json).unwrap()));
     });
     group.finish();
 }
@@ -154,9 +153,7 @@ fn bench_sse_event(c: &mut Criterion) {
         b.iter(|| black_box(serde_json::to_string(&event).unwrap()));
     });
     c.bench_function("sse_event_deserialize", |b| {
-        b.iter(|| {
-            black_box(serde_json::from_str::<TaskStatusUpdateEvent>(&json).unwrap())
-        });
+        b.iter(|| black_box(serde_json::from_str::<TaskStatusUpdateEvent>(&json).unwrap()));
     });
 }
 

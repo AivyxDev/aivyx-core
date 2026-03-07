@@ -1,5 +1,7 @@
-use aivyx_config::speech::{SpeechConfig, SpeechProvider, TtsConfig, TtsProvider as TtsProviderConfig};
 use aivyx_config::ProviderConfig;
+use aivyx_config::speech::{
+    SpeechConfig, SpeechProvider, TtsConfig, TtsProvider as TtsProviderConfig,
+};
 use aivyx_core::{AivyxError, Result};
 use aivyx_crypto::{EncryptedStore, MasterKey};
 use secrecy::SecretString;
@@ -46,7 +48,10 @@ pub fn create_stt_provider(
     match &config.provider {
         SpeechProvider::OpenAi { api_key_ref } => {
             let api_key = resolve_api_key_string(api_key_ref, store, master_key)?;
-            Ok(Box::new(OpenAiSttProvider::new(api_key, config.model.clone())))
+            Ok(Box::new(OpenAiSttProvider::new(
+                api_key,
+                config.model.clone(),
+            )))
         }
         SpeechProvider::Ollama { base_url } => {
             let base = base_url
@@ -66,7 +71,10 @@ pub fn create_tts_provider(
     match &config.provider {
         TtsProviderConfig::OpenAi { api_key_ref } => {
             let api_key = resolve_api_key_string(api_key_ref, store, master_key)?;
-            Ok(Box::new(OpenAiTtsProvider::new(api_key, config.model.clone())))
+            Ok(Box::new(OpenAiTtsProvider::new(
+                api_key,
+                config.model.clone(),
+            )))
         }
         TtsProviderConfig::Edge => Ok(Box::new(EdgeTtsProvider::new())),
     }

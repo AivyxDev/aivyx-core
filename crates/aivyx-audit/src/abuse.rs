@@ -200,7 +200,11 @@ mod tests {
         detector.record_tool_call("agent-1", "shell", false);
         detector.record_tool_call("agent-1", "shell", false);
         let alerts = detector.record_tool_call("agent-1", "shell", false);
-        assert!(alerts.iter().any(|a| matches!(a, AbuseAlert::HighFrequency { calls: 3, .. })));
+        assert!(
+            alerts
+                .iter()
+                .any(|a| matches!(a, AbuseAlert::HighFrequency { calls: 3, .. }))
+        );
     }
 
     #[test]
@@ -212,7 +216,11 @@ mod tests {
         });
         detector.record_tool_call("agent-1", "shell", true);
         let alerts = detector.record_tool_call("agent-1", "web_search", true);
-        assert!(alerts.iter().any(|a| matches!(a, AbuseAlert::RepeatedDenials { denials: 2, .. })));
+        assert!(
+            alerts
+                .iter()
+                .any(|a| matches!(a, AbuseAlert::RepeatedDenials { denials: 2, .. }))
+        );
     }
 
     #[test]
@@ -225,9 +233,13 @@ mod tests {
         detector.record_tool_call("agent-1", "shell", false);
         detector.record_tool_call("agent-1", "web_search", false);
         let alerts = detector.record_tool_call("agent-1", "file_read", false);
-        assert!(alerts
-            .iter()
-            .any(|a| matches!(a, AbuseAlert::ScopeEscalation { unique_tools: 3, .. })));
+        assert!(alerts.iter().any(|a| matches!(
+            a,
+            AbuseAlert::ScopeEscalation {
+                unique_tools: 3,
+                ..
+            }
+        )));
     }
 
     #[test]

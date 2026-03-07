@@ -71,11 +71,7 @@ pub trait SttProvider: Send + Sync {
     ///
     /// * `audio` — Raw audio data in the specified format.
     /// * `format` — Audio format hint (used for MIME type in API calls).
-    async fn transcribe(
-        &self,
-        audio: &[u8],
-        format: AudioFormat,
-    ) -> Result<TranscriptionResult>;
+    async fn transcribe(&self, audio: &[u8], format: AudioFormat) -> Result<TranscriptionResult>;
 }
 
 #[cfg(test)]
@@ -84,11 +80,17 @@ mod tests {
 
     #[test]
     fn audio_format_from_filename() {
-        assert_eq!(AudioFormat::from_filename("recording.mp3"), AudioFormat::Mp3);
+        assert_eq!(
+            AudioFormat::from_filename("recording.mp3"),
+            AudioFormat::Mp3
+        );
         assert_eq!(AudioFormat::from_filename("audio.wav"), AudioFormat::Wav);
         assert_eq!(AudioFormat::from_filename("voice.flac"), AudioFormat::Flac);
         assert_eq!(AudioFormat::from_filename("speech.ogg"), AudioFormat::Ogg);
-        assert_eq!(AudioFormat::from_filename("meeting.webm"), AudioFormat::Webm);
+        assert_eq!(
+            AudioFormat::from_filename("meeting.webm"),
+            AudioFormat::Webm
+        );
         assert_eq!(AudioFormat::from_filename("call.m4a"), AudioFormat::M4a);
         assert_eq!(
             AudioFormat::from_filename("unknown.xyz"),

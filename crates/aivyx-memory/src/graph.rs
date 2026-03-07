@@ -134,11 +134,7 @@ impl KnowledgeGraph {
             if let Some(edges) = self.adjacency.get(&current) {
                 for edge in edges {
                     let mut new_path = current_path.clone();
-                    new_path.push((
-                        current.clone(),
-                        edge.predicate.clone(),
-                        edge.target.clone(),
-                    ));
+                    new_path.push((current.clone(), edge.predicate.clone(), edge.target.clone()));
                     paths.push(GraphPath {
                         hops: new_path.clone(),
                     });
@@ -177,11 +173,7 @@ impl KnowledgeGraph {
             if let Some(edges) = self.adjacency.get(&current) {
                 for edge in edges {
                     let mut new_path = path.clone();
-                    new_path.push((
-                        current.clone(),
-                        edge.predicate.clone(),
-                        edge.target.clone(),
-                    ));
+                    new_path.push((current.clone(), edge.predicate.clone(), edge.target.clone()));
 
                     if edge.target == to {
                         results.push(GraphPath { hops: new_path });
@@ -257,16 +249,8 @@ impl KnowledgeGraph {
 
     /// Get immediate neighborhood of an entity.
     pub fn neighborhood(&self, entity: &str) -> Neighborhood {
-        let outbound = self
-            .adjacency
-            .get(entity)
-            .cloned()
-            .unwrap_or_default();
-        let inbound = self
-            .reverse
-            .get(entity)
-            .cloned()
-            .unwrap_or_default();
+        let outbound = self.adjacency.get(entity).cloned().unwrap_or_default();
+        let inbound = self.reverse.get(entity).cloned().unwrap_or_default();
 
         Neighborhood {
             entity: entity.to_string(),

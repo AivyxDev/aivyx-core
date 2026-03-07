@@ -301,6 +301,11 @@ mod tests {
         let prompt = request.system_prompt.unwrap();
         assert!(prompt.contains("Julian"));
         assert_eq!(request.messages.len(), 1);
-        assert!(request.messages[0].content.text().contains("User prefers Rust"));
+        assert!(
+            request.messages[0]
+                .content
+                .text()
+                .contains("User prefers Rust")
+        );
     }
 }

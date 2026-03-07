@@ -23,10 +23,9 @@ impl std::fmt::Display for Principal {
         match self {
             Principal::Agent(id) => write!(f, "agent:{id}"),
             Principal::User(name) => write!(f, "user:{name}"),
-            Principal::TenantUser {
-                tenant_id,
-                user_id,
-            } => write!(f, "tenant:{tenant_id}:user:{user_id}"),
+            Principal::TenantUser { tenant_id, user_id } => {
+                write!(f, "tenant:{tenant_id}:user:{user_id}")
+            }
             Principal::System => write!(f, "system"),
         }
     }

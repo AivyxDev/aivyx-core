@@ -170,7 +170,10 @@ mod tests {
             scopes = ["tools:read", "tools:execute"]
         "#;
         let config: McpServerConfig = toml::from_str(toml_str).unwrap();
-        if let McpTransport::Sse { auth: Some(auth), .. } = &config.transport {
+        if let McpTransport::Sse {
+            auth: Some(auth), ..
+        } = &config.transport
+        {
             match &auth.method {
                 McpAuthMethod::OAuth { client_id, scopes } => {
                     assert_eq!(client_id, "my-client-id");
@@ -196,7 +199,10 @@ mod tests {
             token_secret_name = "mcp-api-key"
         "#;
         let config: McpServerConfig = toml::from_str(toml_str).unwrap();
-        if let McpTransport::Sse { auth: Some(auth), .. } = &config.transport {
+        if let McpTransport::Sse {
+            auth: Some(auth), ..
+        } = &config.transport
+        {
             match &auth.method {
                 McpAuthMethod::Bearer { token_secret_name } => {
                     assert_eq!(token_secret_name, "mcp-api-key");

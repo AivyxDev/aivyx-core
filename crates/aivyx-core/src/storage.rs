@@ -7,7 +7,7 @@
 //! [`SessionCacheBackend`] abstracts session caching for future Redis support.
 
 use crate::Result;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// Trait abstracting key-value storage operations.
 ///
@@ -220,7 +220,8 @@ mod tests {
         let backend = PostgresBackend::new(PostgresConfig::default());
         let err = backend.put("key", b"value").unwrap_err();
         assert!(
-            err.to_string().contains("PostgresBackend not yet implemented"),
+            err.to_string()
+                .contains("PostgresBackend not yet implemented"),
             "unexpected error: {err}",
         );
     }
@@ -230,7 +231,8 @@ mod tests {
         let backend = PostgresBackend::new(PostgresConfig::default());
         let err = backend.get("key").unwrap_err();
         assert!(
-            err.to_string().contains("PostgresBackend not yet implemented"),
+            err.to_string()
+                .contains("PostgresBackend not yet implemented"),
             "unexpected error: {err}",
         );
     }
@@ -240,7 +242,8 @@ mod tests {
         let backend = PostgresBackend::new(PostgresConfig::default());
         let err = backend.delete("key").unwrap_err();
         assert!(
-            err.to_string().contains("PostgresBackend not yet implemented"),
+            err.to_string()
+                .contains("PostgresBackend not yet implemented"),
             "unexpected error: {err}",
         );
     }
@@ -250,7 +253,8 @@ mod tests {
         let backend = PostgresBackend::new(PostgresConfig::default());
         let err = backend.list_keys().unwrap_err();
         assert!(
-            err.to_string().contains("PostgresBackend not yet implemented"),
+            err.to_string()
+                .contains("PostgresBackend not yet implemented"),
             "unexpected error: {err}",
         );
     }

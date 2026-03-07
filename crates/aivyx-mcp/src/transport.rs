@@ -17,9 +17,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::client::SamplingHandler;
-use crate::protocol::{
-    JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, SamplingRequest,
-};
+use crate::protocol::{JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, SamplingRequest};
 
 /// Trait for MCP transport layers that send requests and receive responses.
 #[async_trait]

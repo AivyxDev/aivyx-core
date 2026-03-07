@@ -342,10 +342,8 @@ mod tests {
 
     #[test]
     fn json_rpc_success_response() {
-        let resp = JsonRpcResponse::success(
-            serde_json::json!(1),
-            serde_json::json!({"task_id": "abc"}),
-        );
+        let resp =
+            JsonRpcResponse::success(serde_json::json!(1), serde_json::json!({"task_id": "abc"}));
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["jsonrpc"], "2.0");
         assert_eq!(json["result"]["task_id"], "abc");

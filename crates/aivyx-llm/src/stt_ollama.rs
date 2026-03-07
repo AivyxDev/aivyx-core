@@ -34,11 +34,7 @@ impl SttProvider for OllamaSttProvider {
         "ollama-stt"
     }
 
-    async fn transcribe(
-        &self,
-        audio: &[u8],
-        _format: AudioFormat,
-    ) -> Result<TranscriptionResult> {
+    async fn transcribe(&self, audio: &[u8], _format: AudioFormat) -> Result<TranscriptionResult> {
         use base64::Engine;
         let audio_b64 = base64::engine::general_purpose::STANDARD.encode(audio);
 
@@ -84,8 +80,7 @@ mod tests {
 
     #[test]
     fn provider_name() {
-        let provider =
-            OllamaSttProvider::new("http://localhost:11434".into(), "whisper".into());
+        let provider = OllamaSttProvider::new("http://localhost:11434".into(), "whisper".into());
         assert_eq!(provider.name(), "ollama-stt");
     }
 }

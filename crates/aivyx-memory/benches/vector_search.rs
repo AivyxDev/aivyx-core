@@ -1,8 +1,8 @@
 //! Benchmarks for vector similarity search — a hot path during memory recall.
 
 use aivyx_core::MemoryId;
-use aivyx_memory::search::{cosine_similarity, VectorIndex};
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use aivyx_memory::search::{VectorIndex, cosine_similarity};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 
 fn make_index(n_vectors: usize, dims: usize) -> VectorIndex {
     let mut index = VectorIndex::new();

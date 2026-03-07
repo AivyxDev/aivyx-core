@@ -71,11 +71,7 @@ pub trait TtsProvider: Send + Sync {
     fn name(&self) -> &str;
 
     /// Synthesize speech from text.
-    async fn synthesize(
-        &self,
-        text: &str,
-        options: &TtsOptions,
-    ) -> Result<TtsOutput>;
+    async fn synthesize(&self, text: &str, options: &TtsOptions) -> Result<TtsOutput>;
 }
 
 #[cfg(test)]

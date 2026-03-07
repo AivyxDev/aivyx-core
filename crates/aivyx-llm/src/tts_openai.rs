@@ -45,11 +45,7 @@ impl TtsProvider for OpenAiTtsProvider {
         "openai-tts"
     }
 
-    async fn synthesize(
-        &self,
-        text: &str,
-        options: &TtsOptions,
-    ) -> Result<TtsOutput> {
+    async fn synthesize(&self, text: &str, options: &TtsOptions) -> Result<TtsOutput> {
         let response_format = Self::openai_format(options.format);
 
         let body = serde_json::json!({

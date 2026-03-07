@@ -102,7 +102,10 @@ pub async fn consolidate(
 
     // 4. Merge each cluster via LLM
     for cluster in &clusters {
-        let contents: Vec<&str> = cluster.iter().map(|&idx| entries[idx].content.as_str()).collect();
+        let contents: Vec<&str> = cluster
+            .iter()
+            .map(|&idx| entries[idx].content.as_str())
+            .collect();
 
         let merged_content = llm_merge(provider, &contents).await?;
 
@@ -203,8 +206,8 @@ mod tests {
     use aivyx_crypto::MasterKey;
     use aivyx_llm::EmbeddingProvider;
     use async_trait::async_trait;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A mock embedding provider that returns deterministic vectors.
     struct MockEmbeddingProvider {
@@ -287,10 +290,8 @@ mod tests {
         MasterKey,
         std::path::PathBuf,
     ) {
-        let dir = std::env::temp_dir().join(format!(
-            "aivyx-consolidation-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("aivyx-consolidation-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let db_path = dir.join("memory.db");
         let store = MemoryStore::open(&db_path).unwrap();
@@ -370,7 +371,10 @@ mod tests {
         let llm = MockLlmProvider;
         let report = consolidate(&mut mgr, &llm, &config).await.unwrap();
 
-        assert_eq!(report.clusters_merged, 1, "3 similar memories should form 1 cluster");
+        assert_eq!(
+            report.clusters_merged, 1,
+            "3 similar memories should form 1 cluster"
+        );
         // After merging, we should have fewer memories (the 3 originals replaced by 1 merged)
         assert!(
             mgr.stats().unwrap().total_memories < 3,
@@ -386,12 +390,7 @@ mod tests {
         let mut mgr = MemoryManager::new(store, provider, key, 0).unwrap();
 
         // Insert an old memory with access_count == 0
-        let mut old_entry = MemoryEntry::new(
-            "Ancient fact".into(),
-            MemoryKind::Fact,
-            None,
-            vec![],
-        );
+        let mut old_entry = MemoryEntry::new("Ancient fact".into(), MemoryKind::Fact, None, vec![]);
         // Set created_at to 100 days ago
         old_entry.created_at = chrono::Utc::now() - chrono::Duration::days(100);
         old_entry.updated_at = old_entry.created_at;
@@ -405,12 +404,7 @@ mod tests {
         mgr.store_raw(&old_entry, &v).unwrap();
 
         // Insert a recent memory
-        let recent = MemoryEntry::new(
-            "Recent fact".into(),
-            MemoryKind::Fact,
-            None,
-            vec![],
-        );
+        let recent = MemoryEntry::new("Recent fact".into(), MemoryKind::Fact, None, vec![]);
         let recent_id = recent.id;
         let v2 = {
             let mut v = vec![0.0f32; 128];
@@ -454,12 +448,7 @@ mod tests {
         let mut mgr = MemoryManager::new(store, provider, key, 0).unwrap();
 
         // Insert a memory with high access count
-        let mut entry = MemoryEntry::new(
-            "Important fact".into(),
-            MemoryKind::Fact,
-            None,
-            vec![],
-        );
+        let mut entry = MemoryEntry::new("Important fact".into(), MemoryKind::Fact, None, vec![]);
         for _ in 0..5 {
             entry.record_access();
         }

@@ -378,9 +378,7 @@ mod tests {
     fn sampling_response_serialization() {
         let resp = SamplingResponse {
             role: "assistant".into(),
-            content: SamplingContent::Text {
-                text: "4".into(),
-            },
+            content: SamplingContent::Text { text: "4".into() },
             model: "claude-sonnet-4-20250514".into(),
         };
         let json = serde_json::to_value(&resp).unwrap();

@@ -162,14 +162,9 @@ pub enum ContentBlock {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ImageSource {
     /// Base64-encoded image data.
-    Base64 {
-        media_type: String,
-        data: String,
-    },
+    Base64 { media_type: String, data: String },
     /// Image accessible via URL.
-    Url {
-        url: String,
-    },
+    Url { url: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -301,8 +296,8 @@ impl ChatMessage {
                 for block in blocks {
                     match block {
                         ContentBlock::Text { text } => {
-                            tokens = tokens
-                                .saturating_add((text.len() as u32).saturating_add(3) / 4);
+                            tokens =
+                                tokens.saturating_add((text.len() as u32).saturating_add(3) / 4);
                         }
                         ContentBlock::Image { .. } => {
                             tokens = tokens.saturating_add(1000);

@@ -173,8 +173,7 @@ impl RetrievalRouter {
                 RetrievalStrategy::MultiSource(strategies) => {
                     let mut all_results = Vec::new();
                     for strat in strategies {
-                        let results =
-                            Self::retrieve(manager, query, strat, top_k).await?;
+                        let results = Self::retrieve(manager, query, strat, top_k).await?;
                         all_results.extend(results);
                     }
                     // Sort by relevance descending, take top_k

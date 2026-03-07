@@ -397,7 +397,6 @@ pub enum AuditEvent {
     },
 
     // --- Phase 5: Enterprise & Scale events ---
-
     /// A new tenant was created.
     TenantCreated {
         /// Tenant identifier.
@@ -1320,10 +1319,7 @@ mod tests {
             scopes: vec!["Chat".into(), "Memory".into()],
         };
         let restored = roundtrip(&event);
-        if let AuditEvent::ApiKeyCreated {
-            key_id, scopes, ..
-        } = restored
-        {
+        if let AuditEvent::ApiKeyCreated { key_id, scopes, .. } = restored {
             assert_eq!(key_id, "k-xyz");
             assert_eq!(scopes, vec!["Chat", "Memory"]);
         } else {
@@ -1421,10 +1417,7 @@ mod tests {
             stages: 4,
         };
         let restored = roundtrip(&event);
-        if let AuditEvent::WorkflowCreated {
-            name, stages, ..
-        } = restored
-        {
+        if let AuditEvent::WorkflowCreated { name, stages, .. } = restored {
             assert_eq!(name, "deploy-pipeline");
             assert_eq!(stages, 4);
         } else {

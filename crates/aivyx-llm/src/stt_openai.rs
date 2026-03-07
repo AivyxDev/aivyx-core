@@ -44,11 +44,7 @@ impl SttProvider for OpenAiSttProvider {
         "openai-whisper"
     }
 
-    async fn transcribe(
-        &self,
-        audio: &[u8],
-        format: AudioFormat,
-    ) -> Result<TranscriptionResult> {
+    async fn transcribe(&self, audio: &[u8], format: AudioFormat) -> Result<TranscriptionResult> {
         let extension = match format {
             AudioFormat::Wav => "wav",
             AudioFormat::Mp3 => "mp3",

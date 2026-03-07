@@ -253,7 +253,10 @@ impl MemoryManager {
     /// Record an outcome from an agent operation.
     pub fn record_outcome(&self, record: &OutcomeRecord) -> Result<OutcomeId> {
         self.store.save_outcome(record, &self.master_key)?;
-        debug!("Recorded outcome {} (success={})", record.id, record.success);
+        debug!(
+            "Recorded outcome {} (success={})",
+            record.id, record.success
+        );
         Ok(record.id)
     }
 
@@ -1108,9 +1111,7 @@ mod tests {
         assert_eq!(id2, r2.id);
 
         // Query all
-        let all = mgr
-            .query_outcomes(&OutcomeFilter::default())
-            .unwrap();
+        let all = mgr.query_outcomes(&OutcomeFilter::default()).unwrap();
         assert_eq!(all.len(), 2);
 
         // Query successes only
@@ -1165,6 +1166,9 @@ mod tests {
         assert_eq!(format_kind(&MemoryKind::Procedure), "procedure");
         assert_eq!(format_kind(&MemoryKind::Decision), "decision");
         assert_eq!(format_kind(&MemoryKind::Outcome), "outcome");
-        assert_eq!(format_kind(&MemoryKind::Custom("custom-kind".into())), "custom-kind");
+        assert_eq!(
+            format_kind(&MemoryKind::Custom("custom-kind".into())),
+            "custom-kind"
+        );
     }
 }
