@@ -16,6 +16,10 @@ pub enum MemoryKind {
     SessionSummary,
     /// A procedure or how-to.
     Procedure,
+    /// A decision with rationale.
+    Decision,
+    /// An outcome summary.
+    Outcome,
     /// Any other kind of memory.
     Custom(String),
 }
@@ -34,6 +38,9 @@ pub struct MemoryEntry {
     pub agent_scope: Option<AgentId>,
     /// Free-form tags for categorization.
     pub tags: Vec<String>,
+    /// Binary attachments (images, audio) associated with this memory.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<MemoryAttachment>,
     /// When this memory was first created.
     pub created_at: DateTime<Utc>,
     /// When this memory was last updated.
@@ -42,6 +49,18 @@ pub struct MemoryEntry {
     pub access_count: u64,
     /// When this memory was last accessed via recall.
     pub last_accessed_at: Option<DateTime<Utc>>,
+}
+
+/// A binary attachment associated with a memory entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryAttachment {
+    /// Unique identifier for this attachment.
+    pub id: String,
+    /// MIME type (e.g., "image/png", "audio/wav").
+    pub media_type: String,
+    /// LLM-generated description of the attachment content.
+    /// Used for embedding and search (description-based image embedding).
+    pub description: Option<String>,
 }
 
 impl MemoryEntry {
@@ -59,6 +78,30 @@ impl MemoryEntry {
             kind,
             agent_scope,
             tags,
+            attachments: Vec::new(),
+            created_at: now,
+            updated_at: now,
+            access_count: 0,
+            last_accessed_at: None,
+        }
+    }
+
+    /// Create a new memory entry with attachments.
+    pub fn with_attachments(
+        content: String,
+        kind: MemoryKind,
+        agent_scope: Option<AgentId>,
+        tags: Vec<String>,
+        attachments: Vec<MemoryAttachment>,
+    ) -> Self {
+        let now = Utc::now();
+        Self {
+            id: MemoryId::new(),
+            content,
+            kind,
+            agent_scope,
+            tags,
+            attachments,
             created_at: now,
             updated_at: now,
             access_count: 0,
@@ -90,6 +133,10 @@ pub struct KnowledgeTriple {
     pub confidence: f32,
     /// Where this knowledge came from (e.g., "user", "derived").
     pub source: String,
+    /// IDs of attachments associated with this triple (e.g., images
+    /// that were the source of visual knowledge).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachment_ids: Vec<String>,
     /// When this triple was created.
     pub created_at: DateTime<Utc>,
 }
@@ -112,6 +159,7 @@ impl KnowledgeTriple {
             agent_scope,
             confidence,
             source,
+            attachment_ids: Vec::new(),
             created_at: Utc::now(),
         }
     }
@@ -164,6 +212,8 @@ mod tests {
             MemoryKind::Preference,
             MemoryKind::SessionSummary,
             MemoryKind::Procedure,
+            MemoryKind::Decision,
+            MemoryKind::Outcome,
             MemoryKind::Custom("workflow".into()),
         ];
         for kind in kinds {
@@ -171,6 +221,21 @@ mod tests {
             let parsed: MemoryKind = serde_json::from_str(&json).unwrap();
             assert_eq!(parsed, kind);
         }
+    }
+
+    #[test]
+    fn decision_and_outcome_kinds_serde() {
+        let decision = MemoryKind::Decision;
+        let json = serde_json::to_string(&decision).unwrap();
+        assert_eq!(json, r#""Decision""#);
+        let parsed: MemoryKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, MemoryKind::Decision);
+
+        let outcome = MemoryKind::Outcome;
+        let json = serde_json::to_string(&outcome).unwrap();
+        assert_eq!(json, r#""Outcome""#);
+        let parsed: MemoryKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, MemoryKind::Outcome);
     }
 
     #[test]
@@ -185,5 +250,105 @@ mod tests {
 
         entry.record_access();
         assert_eq!(entry.access_count, 2);
+    }
+
+    #[test]
+    fn memory_entry_with_attachments() {
+        let entry = MemoryEntry::with_attachments(
+            "A photo of a sunset".into(),
+            MemoryKind::Fact,
+            None,
+            vec!["photo".into()],
+            vec![MemoryAttachment {
+                id: "attach-1".into(),
+                media_type: "image/jpeg".into(),
+                description: Some("A vibrant sunset over the ocean".into()),
+            }],
+        );
+        assert_eq!(entry.attachments.len(), 1);
+        assert_eq!(entry.attachments[0].id, "attach-1");
+        assert_eq!(entry.attachments[0].media_type, "image/jpeg");
+        assert_eq!(
+            entry.attachments[0].description.as_deref(),
+            Some("A vibrant sunset over the ocean")
+        );
+    }
+
+    #[test]
+    fn memory_entry_attachments_backward_compat() {
+        // Existing entries without attachments should deserialize fine
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000001",
+            "content": "old memory",
+            "kind": "Fact",
+            "agent_scope": null,
+            "tags": [],
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+            "access_count": 0,
+            "last_accessed_at": null
+        }"#;
+        let entry: MemoryEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.attachments.is_empty());
+    }
+
+    #[test]
+    fn memory_entry_attachments_serde_roundtrip() {
+        let entry = MemoryEntry::with_attachments(
+            "test".into(),
+            MemoryKind::Fact,
+            None,
+            vec![],
+            vec![MemoryAttachment {
+                id: "img-1".into(),
+                media_type: "image/png".into(),
+                description: None,
+            }],
+        );
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("attachments"));
+        let parsed: MemoryEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.attachments.len(), 1);
+    }
+
+    #[test]
+    fn memory_entry_no_attachments_omits_field() {
+        let entry = MemoryEntry::new("test".into(), MemoryKind::Fact, None, vec![]);
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(!json.contains("attachments")); // skip_serializing_if = "Vec::is_empty"
+    }
+
+    #[test]
+    fn knowledge_triple_with_attachment_ids() {
+        let mut triple = KnowledgeTriple::new(
+            "cat".into(),
+            "looks_like".into(),
+            "fluffy animal".into(),
+            None,
+            0.9,
+            "vision".into(),
+        );
+        triple.attachment_ids.push("img-1".into());
+        let json = serde_json::to_string(&triple).unwrap();
+        assert!(json.contains("attachment_ids"));
+        let parsed: KnowledgeTriple = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.attachment_ids, vec!["img-1"]);
+    }
+
+    #[test]
+    fn knowledge_triple_backward_compat() {
+        // Existing triples without attachment_ids
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000001",
+            "subject": "Rust",
+            "predicate": "is_a",
+            "object": "language",
+            "agent_scope": null,
+            "confidence": 0.95,
+            "source": "user",
+            "created_at": "2024-01-01T00:00:00Z"
+        }"#;
+        let triple: KnowledgeTriple = serde_json::from_str(json).unwrap();
+        assert!(triple.attachment_ids.is_empty());
     }
 }

@@ -44,3 +44,8 @@ jobs:
 
       - name: Format
         run: cargo fmt --all -- --check
+
+      - name: Security audit
+        run: |
+          cargo install cargo-audit --quiet 2>/dev/null || true
+          cargo audit

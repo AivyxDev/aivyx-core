@@ -1,11 +1,15 @@
-//! Speech-to-text configuration for voice input.
+//! Speech configuration for voice input (STT) and voice output (TTS).
 //!
-//! [`SpeechConfig`] defines which transcription provider to use (OpenAI
-//! Whisper API or local Ollama) and the model name.
+//! [`SpeechConfig`] defines which providers to use for speech-to-text
+//! (OpenAI Whisper API or local Ollama) and text-to-speech (OpenAI TTS
+//! or edge-tts).
 
 use serde::{Deserialize, Serialize};
 
-/// Configuration for speech-to-text transcription.
+/// Configuration for voice features (STT + TTS).
+///
+/// The existing `provider` and `model` fields configure STT (backward
+/// compatible). The optional `tts` field enables text-to-speech.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpeechConfig {
     /// Which speech-to-text provider to use.
@@ -13,6 +17,9 @@ pub struct SpeechConfig {
     /// Model name for transcription (e.g., "whisper-1").
     #[serde(default = "default_speech_model")]
     pub model: String,
+    /// Optional text-to-speech configuration.
+    #[serde(default)]
+    pub tts: Option<TtsConfig>,
 }
 
 /// Speech-to-text provider backend.
@@ -34,8 +41,52 @@ pub enum SpeechProvider {
     },
 }
 
+/// Text-to-speech configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TtsConfig {
+    /// Which TTS provider to use.
+    pub provider: TtsProvider,
+    /// Model name for synthesis (e.g., "tts-1", "tts-1-hd").
+    #[serde(default = "default_tts_model")]
+    pub model: String,
+    /// Default voice name.
+    #[serde(default = "default_tts_voice")]
+    pub voice: String,
+    /// Default speech speed (1.0 = normal).
+    #[serde(default = "default_tts_speed")]
+    pub speed: f32,
+}
+
+/// Text-to-speech provider backend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum TtsProvider {
+    /// OpenAI TTS API (cloud).
+    #[serde(rename = "openai")]
+    OpenAi {
+        /// Reference to the API key in the encrypted store.
+        api_key_ref: String,
+    },
+    /// Edge TTS (free, via Microsoft Edge's synthesis service).
+    /// Requires `edge-tts` CLI: `pip install edge-tts`.
+    #[serde(rename = "edge")]
+    Edge,
+}
+
 fn default_speech_model() -> String {
     "whisper-1".into()
+}
+
+fn default_tts_model() -> String {
+    "tts-1".into()
+}
+
+fn default_tts_voice() -> String {
+    "alloy".into()
+}
+
+fn default_tts_speed() -> f32 {
+    1.0
 }
 
 #[cfg(test)]
@@ -49,6 +100,7 @@ mod tests {
                 api_key_ref: "openai-key".into(),
             },
             model: "whisper-1".into(),
+            tts: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("\"type\":\"openai\""));
@@ -70,6 +122,7 @@ mod tests {
                 base_url: Some("http://localhost:11434".into()),
             },
             model: "whisper".into(),
+            tts: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("\"type\":\"ollama\""));
@@ -92,5 +145,68 @@ mod tests {
         "#;
         let config: SpeechConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.model, "whisper-1");
+    }
+
+    #[test]
+    fn speech_config_backward_compat_no_tts() {
+        // Existing configs without tts field should still work
+        let toml_str = r#"
+            model = "whisper-1"
+            [provider]
+            type = "openai"
+            api_key_ref = "openai-key"
+        "#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.tts.is_none());
+    }
+
+    #[test]
+    fn speech_config_with_openai_tts() {
+        let toml_str = r#"
+            model = "whisper-1"
+            [provider]
+            type = "openai"
+            api_key_ref = "openai-key"
+            [tts]
+            model = "tts-1-hd"
+            voice = "nova"
+            speed = 1.2
+            [tts.provider]
+            type = "openai"
+            api_key_ref = "openai-key"
+        "#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        let tts = config.tts.unwrap();
+        assert_eq!(tts.model, "tts-1-hd");
+        assert_eq!(tts.voice, "nova");
+        assert!((tts.speed - 1.2).abs() < f32::EPSILON);
+        assert!(matches!(tts.provider, TtsProvider::OpenAi { .. }));
+    }
+
+    #[test]
+    fn speech_config_with_edge_tts() {
+        let toml_str = r#"
+            model = "whisper-1"
+            [provider]
+            type = "ollama"
+            [tts]
+            voice = "en-US-GuyNeural"
+            [tts.provider]
+            type = "edge"
+        "#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        let tts = config.tts.unwrap();
+        assert_eq!(tts.voice, "en-US-GuyNeural");
+        assert_eq!(tts.model, "tts-1"); // default
+        assert!(matches!(tts.provider, TtsProvider::Edge));
+    }
+
+    #[test]
+    fn tts_config_defaults() {
+        let json = r#"{"provider":{"type":"edge"}}"#;
+        let config: TtsConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.model, "tts-1");
+        assert_eq!(config.voice, "alloy");
+        assert!((config.speed - 1.0).abs() < f32::EPSILON);
     }
 }

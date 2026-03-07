@@ -79,6 +79,11 @@ impl VectorIndex {
         results
     }
 
+    /// Return a reference to all stored vectors, keyed by memory ID.
+    pub fn all_vectors(&self) -> &HashMap<MemoryId, Vec<f32>> {
+        &self.vectors
+    }
+
     /// Number of vectors in the index.
     pub fn len(&self) -> usize {
         self.vectors.len()

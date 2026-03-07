@@ -119,7 +119,37 @@ impl AgentProfile {
     ///
     /// Known roles: `assistant`, `coder`, `researcher`, `writer`, `ops`.
     /// Unknown roles fall back to the generic template.
+    ///
+    /// If `roles_dir` is provided, checks for `{roles_dir}/{role}.toml` first.
+    /// User-defined role templates override the hardcoded presets.
     pub fn for_role(name: &str, role: &str) -> Self {
+        Self::for_role_with_dir(name, role, None)
+    }
+
+    /// Like [`for_role`](Self::for_role), but accepts an optional roles directory
+    /// to load user-defined role templates from.
+    pub fn for_role_with_dir(name: &str, role: &str, roles_dir: Option<&Path>) -> Self {
+        // Check for a user-defined role template first.
+        if let Some(dir) = roles_dir {
+            let role_path = dir.join(format!("{role}.toml"));
+            if role_path.exists() {
+                match Self::load(&role_path) {
+                    Ok(mut profile) => {
+                        // Override the name to match the requested agent name.
+                        profile.name = name.to_string();
+                        return profile;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "  [warn] failed to load role template {}: {e}",
+                            role_path.display()
+                        );
+                        // Fall through to hardcoded presets.
+                    }
+                }
+            }
+        }
+
         match role {
             "assistant" => Self::assistant_profile(name),
             "coder" => Self::coder_profile(name),
@@ -541,6 +571,43 @@ soul = "You are a helpful legacy agent."
         assert!(profile.persona.is_none());
         let soul = profile.effective_soul();
         assert!(soul.contains("coder"));
+    }
+
+    #[test]
+    fn for_role_with_dir_loads_custom_template() {
+        let dir = std::env::temp_dir().join(format!("aivyx-roles-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let toml_content = r#"
+name = "placeholder"
+role = "custom-analyst"
+soul = "You are a custom data analyst."
+tool_ids = ["file_read", "json_parse"]
+max_tokens = 16384
+"#;
+        std::fs::write(dir.join("custom-analyst.toml"), toml_content).unwrap();
+
+        let profile = AgentProfile::for_role_with_dir("my-agent", "custom-analyst", Some(&dir));
+        assert_eq!(profile.name, "my-agent"); // Name overridden
+        assert_eq!(profile.role, "custom-analyst");
+        assert!(profile.soul.contains("custom data analyst"));
+        assert_eq!(profile.max_tokens, 16384);
+        assert_eq!(profile.tool_ids, vec!["file_read", "json_parse"]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn for_role_with_dir_falls_back_to_preset() {
+        let dir = std::env::temp_dir().join(format!("aivyx-roles-empty-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // No "coder.toml" in this directory — should use hardcoded preset.
+        let profile = AgentProfile::for_role_with_dir("test", "coder", Some(&dir));
+        assert_eq!(profile.role, "coder");
+        assert!(profile.persona.is_some()); // Hardcoded preset has persona
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

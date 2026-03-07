@@ -65,7 +65,7 @@ pub trait LlmProvider: Send + Sync {
 
         if !response.message.content.is_empty() {
             let _ = tx
-                .send(StreamEvent::TextDelta(response.message.content.clone()))
+                .send(StreamEvent::TextDelta(response.message.content.to_text()))
                 .await;
         }
 

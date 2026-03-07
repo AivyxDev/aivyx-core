@@ -4,7 +4,7 @@ use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::Aead};
 use rand::RngCore;
 use redb::{Database, ReadableTable, TableDefinition, TableError};
 
-use aivyx_core::{AivyxError, Result};
+use aivyx_core::{AivyxError, Result, StorageBackend};
 
 use crate::master_key::MasterKey;
 
@@ -232,6 +232,41 @@ impl EncryptedStore {
     }
 }
 
+/// A [`StorageBackend`] implementation backed by [`EncryptedStore`] + [`MasterKey`].
+///
+/// Bundles the master key with the store so callers can use the key-agnostic
+/// `StorageBackend` interface while still getting ChaCha20-Poly1305 encryption.
+pub struct EncryptedBackend {
+    store: EncryptedStore,
+    master_key: MasterKey,
+}
+
+impl EncryptedBackend {
+    /// Open or create an encrypted backend at the given path.
+    pub fn open(path: impl AsRef<Path>, master_key: MasterKey) -> Result<Self> {
+        let store = EncryptedStore::open(path)?;
+        Ok(Self { store, master_key })
+    }
+}
+
+impl StorageBackend for EncryptedBackend {
+    fn put(&self, key: &str, value: &[u8]) -> Result<()> {
+        self.store.put(key, value, &self.master_key)
+    }
+
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        self.store.get(key, &self.master_key)
+    }
+
+    fn delete(&self, key: &str) -> Result<()> {
+        self.store.delete(key)
+    }
+
+    fn list_keys(&self) -> Result<Vec<String>> {
+        self.store.list_keys()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,6 +367,57 @@ mod tests {
         let mut keys = store.list_keys().unwrap();
         keys.sort();
         assert_eq!(keys, vec!["alpha", "beta", "gamma"]);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // EncryptedBackend (StorageBackend impl) tests
+    // -----------------------------------------------------------------------
+
+    fn temp_backend() -> (EncryptedBackend, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("aivyx-backend-test-{}", rand::random::<u64>()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("backend.redb");
+        let key = MasterKey::generate();
+        let backend = EncryptedBackend::open(&path, key).unwrap();
+        (backend, dir)
+    }
+
+    #[test]
+    fn encrypted_backend_put_get_roundtrip() {
+        let (backend, dir) = temp_backend();
+        StorageBackend::put(&backend, "hello", b"world").unwrap();
+        let got = StorageBackend::get(&backend, "hello").unwrap().unwrap();
+        assert_eq!(got, b"world");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn encrypted_backend_delete() {
+        let (backend, dir) = temp_backend();
+        StorageBackend::put(&backend, "key", b"val").unwrap();
+        StorageBackend::delete(&backend, "key").unwrap();
+        let got = StorageBackend::get(&backend, "key").unwrap();
+        assert!(got.is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn encrypted_backend_list_keys() {
+        let (backend, dir) = temp_backend();
+        StorageBackend::put(&backend, "a", b"1").unwrap();
+        StorageBackend::put(&backend, "b", b"2").unwrap();
+        let mut keys = StorageBackend::list_keys(&backend).unwrap();
+        keys.sort();
+        assert_eq!(keys, vec!["a", "b"]);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn encrypted_backend_get_missing_returns_none() {
+        let (backend, dir) = temp_backend();
+        let got = StorageBackend::get(&backend, "nonexistent").unwrap();
+        assert!(got.is_none());
         fs::remove_dir_all(&dir).ok();
     }
 }

@@ -19,6 +19,10 @@ pub struct FederationConfig {
     /// Configured peers.
     #[serde(default)]
     pub peers: Vec<PeerConfig>,
+
+    /// Failover configuration.
+    #[serde(default)]
+    pub failover: FailoverConfig,
 }
 
 /// Configuration for a single federation peer.
@@ -65,6 +69,24 @@ pub struct TrustPolicy {
     pub max_tier: String,
 }
 
+/// Failover configuration for federated relay operations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FailoverConfig {
+    /// Whether automatic failover is enabled.
+    pub enabled: bool,
+    /// Maximum number of peers to try before giving up.
+    pub max_attempts: usize,
+}
+
+impl Default for FailoverConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_attempts: 3,
+        }
+    }
+}
+
 fn default_max_tier() -> String {
     "leash".to_string()
 }
@@ -85,6 +107,40 @@ impl FederationConfig {
             enabled: false,
             private_key_path: None,
             peers: Vec::new(),
+            failover: FailoverConfig::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failover_config_defaults() {
+        let config = FailoverConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.max_attempts, 3);
+    }
+
+    #[test]
+    fn failover_config_serde_roundtrip() {
+        let config = FailoverConfig {
+            enabled: false,
+            max_attempts: 5,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: FailoverConfig = serde_json::from_str(&json).unwrap();
+        assert!(!deserialized.enabled);
+        assert_eq!(deserialized.max_attempts, 5);
+    }
+
+    #[test]
+    fn federation_config_with_failover_default() {
+        // When "failover" key is missing, defaults should apply.
+        let json = r#"{"instance_id": "test", "private_key_path": null}"#;
+        let config: FederationConfig = serde_json::from_str(json).unwrap();
+        assert!(config.failover.enabled);
+        assert_eq!(config.failover.max_attempts, 3);
     }
 }

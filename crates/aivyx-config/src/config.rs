@@ -77,6 +77,39 @@ pub struct AivyxConfig {
     /// Stored as `[federation]` in TOML.
     #[serde(default)]
     pub federation: Option<aivyx_federation::config::FederationConfig>,
+    /// Multi-tenancy configuration.
+    ///
+    /// Enables tenant isolation, per-tenant quotas, and API key management.
+    /// `None` means single-user mode. Stored as `[tenants]` in TOML.
+    #[serde(default)]
+    pub tenants: Option<TenantsConfig>,
+    /// Inbound webhook triggers.
+    ///
+    /// Each trigger listens for HTTP POST requests and spawns an agent turn
+    /// with a templated prompt. Stored as `[[triggers]]` in TOML.
+    #[serde(default)]
+    pub triggers: Vec<TriggerConfig>,
+    /// Backup configuration.
+    ///
+    /// Configures automatic backups of the data directory including schedule,
+    /// destination, and retention policy. `None` means backups are disabled.
+    /// Stored as `[backup]` in TOML.
+    #[serde(default)]
+    pub backup: Option<BackupConfig>,
+    /// Billing and cost governance configuration.
+    ///
+    /// Controls per-agent and per-tenant spending limits, alert thresholds,
+    /// and webhook notifications. `None` means no billing limits are enforced.
+    /// Stored as `[billing]` in TOML.
+    #[serde(default)]
+    pub billing: Option<BillingConfig>,
+    /// SSO / OIDC configuration.
+    ///
+    /// Configures OIDC identity provider settings and group-to-role mappings
+    /// for single sign-on authentication. `None` means SSO is disabled.
+    /// Stored as `[sso]` in TOML.
+    #[serde(default)]
+    pub sso: Option<SsoConfig>,
 }
 
 impl AivyxConfig {
@@ -250,6 +283,134 @@ impl AivyxConfig {
         *self = updated;
         Ok(())
     }
+}
+
+/// Billing and cost governance configuration.
+///
+/// Controls per-agent and per-tenant spending limits, alert thresholds,
+/// and webhook notifications. Stored as `[billing]` in TOML.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct BillingConfig {
+    #[serde(default)]
+    pub agent_daily_usd: Option<f64>,
+    #[serde(default)]
+    pub agent_monthly_usd: Option<f64>,
+    #[serde(default)]
+    pub tenant_daily_usd: Option<f64>,
+    #[serde(default)]
+    pub tenant_monthly_usd: Option<f64>,
+    #[serde(default)]
+    pub alert_threshold: Option<f64>,
+    #[serde(default)]
+    pub alert_webhook: Option<String>,
+}
+
+/// Backup configuration for automatic data directory archiving.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupConfig {
+    /// Whether automatic backups are enabled.
+    pub enabled: bool,
+    /// Cron expression for the backup schedule (e.g. `"0 2 * * *"` for daily at 2am).
+    pub schedule: String,
+    /// Destination directory for backup archives (local filesystem path).
+    pub destination: String,
+    /// Number of days to retain backups before automatic pruning.
+    pub retention_days: u32,
+}
+
+impl Default for BackupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            schedule: "0 2 * * *".into(),
+            destination: String::new(),
+            retention_days: 30,
+        }
+    }
+}
+
+/// Multi-tenancy configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TenantsConfig {
+    /// Whether multi-tenancy is enabled.
+    pub enabled: bool,
+    /// Default resource quotas for new tenants.
+    #[serde(default)]
+    pub default_quotas: DefaultQuotas,
+}
+
+/// Default quotas applied to newly created tenants.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DefaultQuotas {
+    #[serde(default)]
+    pub max_agents: Option<u32>,
+    #[serde(default)]
+    pub max_sessions_per_day: Option<u32>,
+    #[serde(default)]
+    pub max_storage_mb: Option<u64>,
+    #[serde(default)]
+    pub max_llm_tokens_per_day: Option<u64>,
+    #[serde(default)]
+    pub max_llm_tokens_per_month: Option<u64>,
+}
+
+/// Configuration for an inbound webhook trigger.
+///
+/// When a matching HTTP POST arrives at `/webhooks/{name}`, the engine
+/// verifies the HMAC signature (if configured) and spawns an agent turn
+/// with `prompt_template` interpolated from the request payload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TriggerConfig {
+    /// Unique trigger name (used as the URL path segment).
+    pub name: String,
+    /// Which agent to run when the trigger fires.
+    pub agent: String,
+    /// Prompt template — may contain `{payload}` placeholder.
+    pub prompt_template: String,
+    /// Optional HMAC-SHA256 secret reference (key name in EncryptedStore).
+    /// When set, the webhook validates `X-Hub-Signature-256` header.
+    #[serde(default)]
+    pub secret_ref: Option<String>,
+    /// Whether this trigger is currently active.
+    #[serde(default = "default_trigger_enabled")]
+    pub enabled: bool,
+}
+
+fn default_trigger_enabled() -> bool {
+    true
+}
+
+/// SSO configuration for OIDC-based single sign-on.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct SsoConfig {
+    /// OIDC provider configuration.
+    #[serde(default)]
+    pub oidc: Option<OidcProviderConfig>,
+    /// Group-to-role mappings for RBAC assignment from OIDC groups.
+    #[serde(default)]
+    pub role_mappings: Vec<GroupRoleMappingConfig>,
+}
+
+/// OIDC identity provider configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OidcProviderConfig {
+    /// The OIDC issuer URL (e.g., `https://idp.example.com/realms/aivyx`).
+    pub issuer_url: String,
+    /// The OIDC client ID.
+    pub client_id: String,
+    /// Optional reference to a client secret stored in EncryptedStore.
+    pub client_secret_ref: Option<String>,
+    /// Optional audience claim for token validation.
+    pub audience: Option<String>,
+}
+
+/// Configuration mapping an OIDC group name to an Aivyx role string.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GroupRoleMappingConfig {
+    /// The OIDC group name to match.
+    pub group: String,
+    /// The Aivyx role name (e.g., "Admin", "Operator", "Viewer", "Billing").
+    pub role: String,
 }
 
 fn resolve_key(value: &toml::Value, key: &str) -> Option<String> {
@@ -610,6 +771,281 @@ mod tests {
             loaded.channels[0].settings.get("bot_token_ref").unwrap(),
             "tg-bot-token"
         );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn tenants_config_absent_parses_as_none() {
+        // Default config has no tenants section → parses as None
+        let config = AivyxConfig::default();
+        assert!(config.tenants.is_none());
+        // Roundtrip: serialize and deserialize, still None
+        let toml_str = toml::to_string(&config).unwrap();
+        let parsed: AivyxConfig = toml::from_str(&toml_str).unwrap();
+        assert!(parsed.tenants.is_none());
+    }
+
+    #[test]
+    fn tenants_config_deserializes() {
+        let mut config = AivyxConfig::default();
+        config.tenants = Some(TenantsConfig {
+            enabled: true,
+            default_quotas: DefaultQuotas {
+                max_agents: Some(10),
+                max_sessions_per_day: Some(100),
+                max_storage_mb: Some(512),
+                max_llm_tokens_per_day: Some(50000),
+                max_llm_tokens_per_month: Some(1_000_000),
+            },
+        });
+
+        let toml_str = toml::to_string(&config).unwrap();
+        let parsed: AivyxConfig = toml::from_str(&toml_str).unwrap();
+        let tenants = parsed.tenants.unwrap();
+        assert!(tenants.enabled);
+        assert_eq!(tenants.default_quotas.max_agents, Some(10));
+        assert_eq!(tenants.default_quotas.max_sessions_per_day, Some(100));
+        assert_eq!(tenants.default_quotas.max_storage_mb, Some(512));
+        assert_eq!(tenants.default_quotas.max_llm_tokens_per_day, Some(50000));
+        assert_eq!(tenants.default_quotas.max_llm_tokens_per_month, Some(1_000_000));
+    }
+
+    #[test]
+    fn tenants_config_minimal_with_defaults() {
+        let mut config = AivyxConfig::default();
+        config.tenants = Some(TenantsConfig {
+            enabled: false,
+            default_quotas: DefaultQuotas::default(),
+        });
+
+        let toml_str = toml::to_string(&config).unwrap();
+        let parsed: AivyxConfig = toml::from_str(&toml_str).unwrap();
+        let tenants = parsed.tenants.unwrap();
+        assert!(!tenants.enabled);
+        assert!(tenants.default_quotas.max_agents.is_none());
+        assert!(tenants.default_quotas.max_sessions_per_day.is_none());
+        assert!(tenants.default_quotas.max_storage_mb.is_none());
+        assert!(tenants.default_quotas.max_llm_tokens_per_day.is_none());
+        assert!(tenants.default_quotas.max_llm_tokens_per_month.is_none());
+    }
+
+    #[test]
+    fn tenants_config_roundtrip() {
+        let mut config = AivyxConfig::default();
+        config.tenants = Some(TenantsConfig {
+            enabled: true,
+            default_quotas: DefaultQuotas {
+                max_agents: Some(5),
+                max_sessions_per_day: None,
+                max_storage_mb: Some(1024),
+                max_llm_tokens_per_day: None,
+                max_llm_tokens_per_month: Some(500_000),
+            },
+        });
+
+        let path =
+            std::env::temp_dir().join(format!("aivyx-cfg-tenants-{}.toml", rand::random::<u64>()));
+        config.save(&path).unwrap();
+        let loaded = AivyxConfig::load(&path).unwrap();
+        let tenants = loaded.tenants.unwrap();
+        assert!(tenants.enabled);
+        assert_eq!(tenants.default_quotas.max_agents, Some(5));
+        assert!(tenants.default_quotas.max_sessions_per_day.is_none());
+        assert_eq!(tenants.default_quotas.max_storage_mb, Some(1024));
+        assert_eq!(tenants.default_quotas.max_llm_tokens_per_month, Some(500_000));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn trigger_config_serde_roundtrip() {
+        let trigger = TriggerConfig {
+            name: "deploy-hook".into(),
+            agent: "ops-agent".into(),
+            prompt_template: "Deployment event: {payload}".into(),
+            secret_ref: Some("webhook-secret".into()),
+            enabled: true,
+        };
+        let json = serde_json::to_string(&trigger).unwrap();
+        let parsed: TriggerConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, trigger);
+    }
+
+    #[test]
+    fn trigger_config_defaults() {
+        let json = r#"{
+            "name": "test",
+            "agent": "a",
+            "prompt_template": "p"
+        }"#;
+        let trigger: TriggerConfig = serde_json::from_str(json).unwrap();
+        assert!(trigger.enabled);
+        assert!(trigger.secret_ref.is_none());
+    }
+
+    #[test]
+    fn triggers_absent_parses_as_empty_vec() {
+        let config = AivyxConfig::default();
+        assert!(config.triggers.is_empty());
+        // Roundtrip
+        let toml_str = toml::to_string(&config).unwrap();
+        let parsed: AivyxConfig = toml::from_str(&toml_str).unwrap();
+        assert!(parsed.triggers.is_empty());
+    }
+
+    #[test]
+    fn triggers_roundtrip() {
+        let mut config = AivyxConfig::default();
+        config.triggers = vec![TriggerConfig {
+            name: "github-push".into(),
+            agent: "ci-agent".into(),
+            prompt_template: "Handle push: {payload}".into(),
+            secret_ref: Some("gh-secret".into()),
+            enabled: true,
+        }];
+
+        let path = std::env::temp_dir()
+            .join(format!("aivyx-cfg-triggers-{}.toml", rand::random::<u64>()));
+        config.save(&path).unwrap();
+        let loaded = AivyxConfig::load(&path).unwrap();
+        assert_eq!(loaded.triggers.len(), 1);
+        assert_eq!(loaded.triggers[0].name, "github-push");
+        assert_eq!(loaded.triggers[0].agent, "ci-agent");
+        assert!(loaded.triggers[0].enabled);
+        assert_eq!(loaded.triggers[0].secret_ref, Some("gh-secret".into()));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn billing_config_absent_parses_as_none() {
+        let config = AivyxConfig::default();
+        assert!(config.billing.is_none());
+        let toml_str = toml::to_string(&config).unwrap();
+        let parsed: AivyxConfig = toml::from_str(&toml_str).unwrap();
+        assert!(parsed.billing.is_none());
+    }
+
+    #[test]
+    fn billing_config_serde_roundtrip() {
+        let billing = BillingConfig {
+            agent_daily_usd: Some(5.0),
+            agent_monthly_usd: Some(100.0),
+            tenant_daily_usd: Some(50.0),
+            tenant_monthly_usd: Some(1000.0),
+            alert_threshold: Some(0.8),
+            alert_webhook: Some("https://hooks.example.com/billing".into()),
+        };
+        let json = serde_json::to_string(&billing).unwrap();
+        let parsed: BillingConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, billing);
+    }
+
+    #[test]
+    fn billing_config_default_is_empty() {
+        let billing = BillingConfig::default();
+        assert!(billing.agent_daily_usd.is_none());
+        assert!(billing.agent_monthly_usd.is_none());
+        assert!(billing.tenant_daily_usd.is_none());
+        assert!(billing.tenant_monthly_usd.is_none());
+        assert!(billing.alert_threshold.is_none());
+        assert!(billing.alert_webhook.is_none());
+    }
+
+    #[test]
+    fn billing_config_toml_roundtrip() {
+        let mut config = AivyxConfig::default();
+        config.billing = Some(BillingConfig {
+            agent_daily_usd: Some(10.0),
+            agent_monthly_usd: None,
+            tenant_daily_usd: Some(100.0),
+            tenant_monthly_usd: Some(2000.0),
+            alert_threshold: Some(0.9),
+            alert_webhook: None,
+        });
+
+        let path = std::env::temp_dir()
+            .join(format!("aivyx-cfg-billing-{}.toml", rand::random::<u64>()));
+        config.save(&path).unwrap();
+        let loaded = AivyxConfig::load(&path).unwrap();
+        let billing = loaded.billing.unwrap();
+        assert_eq!(billing.agent_daily_usd, Some(10.0));
+        assert!(billing.agent_monthly_usd.is_none());
+        assert_eq!(billing.tenant_daily_usd, Some(100.0));
+        assert_eq!(billing.tenant_monthly_usd, Some(2000.0));
+        assert_eq!(billing.alert_threshold, Some(0.9));
+        assert!(billing.alert_webhook.is_none());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn sso_config_absent_parses_as_none() {
+        let config = AivyxConfig::default();
+        assert!(config.sso.is_none());
+        let toml_str = toml::to_string(&config).unwrap();
+        let parsed: AivyxConfig = toml::from_str(&toml_str).unwrap();
+        assert!(parsed.sso.is_none());
+    }
+
+    #[test]
+    fn sso_config_serde_roundtrip() {
+        let sso = SsoConfig {
+            oidc: Some(OidcProviderConfig {
+                issuer_url: "https://idp.example.com/realms/aivyx".into(),
+                client_id: "aivyx-engine".into(),
+                client_secret_ref: Some("oidc-secret".into()),
+                audience: Some("aivyx-api".into()),
+            }),
+            role_mappings: vec![
+                GroupRoleMappingConfig {
+                    group: "admins".into(),
+                    role: "Admin".into(),
+                },
+                GroupRoleMappingConfig {
+                    group: "developers".into(),
+                    role: "Operator".into(),
+                },
+            ],
+        };
+        let json = serde_json::to_string(&sso).unwrap();
+        let parsed: SsoConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, sso);
+    }
+
+    #[test]
+    fn sso_config_default_is_empty() {
+        let sso = SsoConfig::default();
+        assert!(sso.oidc.is_none());
+        assert!(sso.role_mappings.is_empty());
+    }
+
+    #[test]
+    fn sso_config_toml_roundtrip() {
+        let mut config = AivyxConfig::default();
+        config.sso = Some(SsoConfig {
+            oidc: Some(OidcProviderConfig {
+                issuer_url: "https://auth.example.com".into(),
+                client_id: "my-app".into(),
+                client_secret_ref: None,
+                audience: Some("api".into()),
+            }),
+            role_mappings: vec![GroupRoleMappingConfig {
+                group: "ops".into(),
+                role: "Operator".into(),
+            }],
+        });
+
+        let path = std::env::temp_dir()
+            .join(format!("aivyx-cfg-sso-{}.toml", rand::random::<u64>()));
+        config.save(&path).unwrap();
+        let loaded = AivyxConfig::load(&path).unwrap();
+        let sso = loaded.sso.unwrap();
+        let oidc = sso.oidc.unwrap();
+        assert_eq!(oidc.issuer_url, "https://auth.example.com");
+        assert_eq!(oidc.client_id, "my-app");
+        assert!(oidc.client_secret_ref.is_none());
+        assert_eq!(oidc.audience, Some("api".into()));
+        assert_eq!(sso.role_mappings.len(), 1);
+        assert_eq!(sso.role_mappings[0].group, "ops");
+        assert_eq!(sso.role_mappings[0].role, "Operator");
         std::fs::remove_file(&path).ok();
     }
 }

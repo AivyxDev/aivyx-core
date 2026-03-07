@@ -695,7 +695,7 @@ impl Tool for TranslateTool {
 
         let response = provider.chat(&request).await?;
 
-        let output = response.message.content.trim().to_string();
+        let output = response.message.content.text().trim().to_string();
 
         // If source was auto-detected, try to parse it from the response
         let detected_source = if source.is_none() {

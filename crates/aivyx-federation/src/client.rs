@@ -7,7 +7,7 @@ use tokio::sync::RwLock;
 use aivyx_core::AivyxError;
 
 use crate::auth::FederationAuth;
-use crate::config::{FederationConfig, PeerConfig};
+use crate::config::{FailoverConfig, FederationConfig, PeerConfig};
 use crate::types::{PeerAgent, PeerStatus, PingResponse};
 
 /// State for a single peer.
@@ -219,5 +219,193 @@ impl FederationClient {
         peers
             .get(peer_id)
             .and_then(|p| p.config.trust_policy.clone())
+    }
+
+    /// Get the failover configuration.
+    pub fn failover_config(&self) -> &FailoverConfig {
+        &self.config.failover
+    }
+
+    /// Select the best healthy peer that can handle the given capability.
+    /// Priority: most recently seen first, then alphabetical as tiebreaker.
+    /// Returns `None` if no healthy peers match.
+    pub async fn select_peer(&self, capability: &str) -> Option<String> {
+        let candidates = self.healthy_peers_for(capability).await;
+        candidates.into_iter().next()
+    }
+
+    /// List all healthy peers with a given capability, ordered by preference
+    /// (most recently seen first).
+    pub async fn healthy_peers_for(&self, capability: &str) -> Vec<String> {
+        let peers = self.peers.read().await;
+        let mut candidates: Vec<_> = peers
+            .values()
+            .filter(|p| p.healthy && p.config.capabilities.contains(&capability.to_string()))
+            .collect();
+
+        // Sort by last_seen descending (most recent first), then alphabetical as tiebreaker.
+        candidates.sort_by(|a, b| {
+            match (b.last_seen, a.last_seen) {
+                (Some(b_time), Some(a_time)) => b_time.cmp(&a_time),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+            .then_with(|| a.config.id.cmp(&b.config.id))
+        });
+
+        candidates.into_iter().map(|p| p.config.id.clone()).collect()
+    }
+
+    /// Mark a peer as unhealthy.
+    pub async fn mark_unhealthy(&self, peer_id: &str) {
+        let mut peers = self.peers.write().await;
+        if let Some(state) = peers.get_mut(peer_id) {
+            state.healthy = false;
+            tracing::warn!(peer = %peer_id, "marked peer unhealthy due to failover");
+        }
+    }
+
+    /// Set peer health state for testing.
+    #[cfg(test)]
+    pub(crate) async fn set_peer_healthy(&self, peer_id: &str, healthy: bool, agents: Vec<String>) {
+        let mut peers = self.peers.write().await;
+        if let Some(state) = peers.get_mut(peer_id) {
+            state.healthy = healthy;
+            state.agents = agents;
+            if healthy {
+                state.last_seen = Some(chrono::Utc::now());
+            }
+        }
+    }
+
+    /// Set peer last_seen for testing.
+    #[cfg(test)]
+    pub(crate) async fn set_peer_last_seen(
+        &self,
+        peer_id: &str,
+        last_seen: Option<chrono::DateTime<chrono::Utc>>,
+    ) {
+        let mut peers = self.peers.write().await;
+        if let Some(state) = peers.get_mut(peer_id) {
+            state.last_seen = last_seen;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::FederationAuth;
+    use crate::config::{FailoverConfig, FederationConfig, PeerConfig};
+
+    fn make_peer(id: &str, capabilities: Vec<&str>) -> PeerConfig {
+        PeerConfig {
+            id: id.to_string(),
+            url: format!("https://{id}.example.com"),
+            public_key: "AAAA".to_string(),
+            capabilities: capabilities.into_iter().map(String::from).collect(),
+            trust_policy: None,
+        }
+    }
+
+    fn make_client(peers: Vec<PeerConfig>) -> FederationClient {
+        let config = FederationConfig {
+            instance_id: "test-instance".to_string(),
+            enabled: true,
+            private_key_path: None,
+            peers,
+            failover: FailoverConfig::default(),
+        };
+        let auth = FederationAuth::generate("test-instance".to_string());
+        FederationClient::new(config, auth)
+    }
+
+    #[tokio::test]
+    async fn select_peer_returns_healthy() {
+        let client = make_client(vec![
+            make_peer("peer-a", vec!["chat"]),
+            make_peer("peer-b", vec!["chat"]),
+        ]);
+        client
+            .set_peer_healthy("peer-a", true, vec![])
+            .await;
+        client
+            .set_peer_healthy("peer-b", true, vec![])
+            .await;
+
+        let selected = client.select_peer("chat").await;
+        assert!(selected.is_some());
+    }
+
+    #[tokio::test]
+    async fn select_peer_none_when_all_unhealthy() {
+        let client = make_client(vec![
+            make_peer("peer-a", vec!["chat"]),
+            make_peer("peer-b", vec!["chat"]),
+        ]);
+        // Peers start unhealthy by default, don't mark any healthy.
+        let selected = client.select_peer("chat").await;
+        assert!(selected.is_none());
+    }
+
+    #[tokio::test]
+    async fn select_peer_filters_by_capability() {
+        let client = make_client(vec![
+            make_peer("peer-a", vec!["chat"]),
+            make_peer("peer-b", vec!["memory"]),
+        ]);
+        client.set_peer_healthy("peer-a", true, vec![]).await;
+        client.set_peer_healthy("peer-b", true, vec![]).await;
+
+        let selected = client.select_peer("memory").await;
+        assert_eq!(selected, Some("peer-b".to_string()));
+
+        let selected = client.select_peer("chat").await;
+        assert_eq!(selected, Some("peer-a".to_string()));
+
+        let selected = client.select_peer("nonexistent").await;
+        assert!(selected.is_none());
+    }
+
+    #[tokio::test]
+    async fn healthy_peers_ordered_by_last_seen() {
+        let client = make_client(vec![
+            make_peer("peer-a", vec!["chat"]),
+            make_peer("peer-b", vec!["chat"]),
+            make_peer("peer-c", vec!["chat"]),
+        ]);
+
+        // Set all healthy with different last_seen times.
+        let now = chrono::Utc::now();
+        client.set_peer_healthy("peer-a", true, vec![]).await;
+        client
+            .set_peer_last_seen("peer-a", Some(now - chrono::Duration::seconds(30)))
+            .await;
+
+        client.set_peer_healthy("peer-b", true, vec![]).await;
+        client
+            .set_peer_last_seen("peer-b", Some(now - chrono::Duration::seconds(10)))
+            .await;
+
+        client.set_peer_healthy("peer-c", true, vec![]).await;
+        client
+            .set_peer_last_seen("peer-c", Some(now - chrono::Duration::seconds(20)))
+            .await;
+
+        let peers = client.healthy_peers_for("chat").await;
+        assert_eq!(peers, vec!["peer-b", "peer-c", "peer-a"]);
+    }
+
+    #[tokio::test]
+    async fn mark_unhealthy_updates_state() {
+        let client = make_client(vec![make_peer("peer-a", vec!["chat"])]);
+        client.set_peer_healthy("peer-a", true, vec![]).await;
+
+        assert!(client.select_peer("chat").await.is_some());
+
+        client.mark_unhealthy("peer-a").await;
+
+        assert!(client.select_peer("chat").await.is_none());
     }
 }

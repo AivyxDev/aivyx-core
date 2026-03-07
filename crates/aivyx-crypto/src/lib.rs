@@ -13,6 +13,6 @@ pub mod store;
 pub use kdf::{KdfParams, derive_key};
 pub use master_key::{
     MasterKey, MasterKeyEnvelope, derive_audit_key, derive_memory_key, derive_schedule_key,
-    derive_task_key, derive_team_session_key, derive_tool_key,
+    derive_task_key, derive_team_session_key, derive_tenant_key, derive_tool_key,
 };
-pub use store::{EncryptedStore, ReEncryptResult};
+pub use store::{EncryptedBackend, EncryptedStore, ReEncryptResult};

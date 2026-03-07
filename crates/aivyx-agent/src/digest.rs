@@ -45,7 +45,7 @@ pub async fn generate_digest(
     };
 
     let response = provider.chat(&request).await?;
-    Ok(response.message.content)
+    Ok(response.message.content.to_text())
 }
 
 #[cfg(test)]

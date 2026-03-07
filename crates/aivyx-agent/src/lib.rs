@@ -20,6 +20,7 @@ pub mod persona;
 pub mod plugin_tools;
 pub mod profile;
 pub mod rate_limiter;
+pub mod sanitize;
 pub mod self_tools;
 pub mod session;
 pub mod session_store;

@@ -4,6 +4,7 @@
 //! appended to an HMAC-SHA256 chained log. The chain ensures that any
 //! modification to past entries is detectable via [`AuditLog::verify`].
 
+pub mod abuse;
 pub mod event;
 pub mod export;
 pub mod log;

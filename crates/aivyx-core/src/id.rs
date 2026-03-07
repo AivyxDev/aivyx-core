@@ -64,6 +64,8 @@ newtype_id!(MemoryId);
 newtype_id!(TripleId);
 newtype_id!(TaskId);
 newtype_id!(NotificationId);
+newtype_id!(TenantId);
+newtype_id!(OutcomeId);
 
 #[cfg(test)]
 mod tests {

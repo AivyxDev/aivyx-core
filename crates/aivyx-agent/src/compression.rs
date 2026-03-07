@@ -143,7 +143,7 @@ mod tests {
             .unwrap();
         // Should be compressed: 1 summary + 40% of 40 = 16 recent
         assert!(result.len() < messages.len());
-        assert!(result[0].content.contains("[Conversation summary]"));
+        assert!(result[0].content.text().contains("[Conversation summary]"));
     }
 
     #[tokio::test]

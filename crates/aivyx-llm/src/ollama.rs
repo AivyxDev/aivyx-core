@@ -7,7 +7,8 @@ use tracing::debug;
 use aivyx_core::{AivyxError, Result};
 
 use crate::message::{
-    ChatMessage, ChatRequest, ChatResponse, Role, StopReason, TokenUsage, ToolCall,
+    ChatMessage, ChatRequest, ChatResponse, Content, ContentBlock, ImageSource, Role, StopReason,
+    TokenUsage, ToolCall,
 };
 use crate::provider::LlmProvider;
 
@@ -50,19 +51,51 @@ impl OllamaProvider {
                 Role::System => {
                     messages.push(serde_json::json!({
                         "role": "system",
-                        "content": msg.content,
+                        "content": msg.content.text(),
                     }));
                 }
                 Role::User => {
+                    // Ollama vision models accept images via the OpenAI-compatible
+                    // image_url format when using /v1/chat/completions.
+                    let api_content = match &msg.content {
+                        Content::Text(s) => serde_json::json!(s),
+                        Content::Blocks(blocks) => {
+                            let mapped: Vec<serde_json::Value> = blocks
+                                .iter()
+                                .filter_map(|b| match b {
+                                    ContentBlock::Text { text } => {
+                                        Some(serde_json::json!({"type": "text", "text": text}))
+                                    }
+                                    ContentBlock::Image { source } => Some(match source {
+                                        ImageSource::Base64 { media_type, data } => {
+                                            serde_json::json!({
+                                                "type": "image_url",
+                                                "image_url": {
+                                                    "url": format!("data:{media_type};base64,{data}")
+                                                }
+                                            })
+                                        }
+                                        ImageSource::Url { url } => {
+                                            serde_json::json!({
+                                                "type": "image_url",
+                                                "image_url": {"url": url}
+                                            })
+                                        }
+                                    }),
+                                })
+                                .collect();
+                            serde_json::json!(mapped)
+                        }
+                    };
                     messages.push(serde_json::json!({
                         "role": "user",
-                        "content": msg.content,
+                        "content": api_content,
                     }));
                 }
                 Role::Assistant => {
                     let mut entry = serde_json::json!({
                         "role": "assistant",
-                        "content": msg.content,
+                        "content": msg.content.text(),
                     });
                     if !msg.tool_calls.is_empty() {
                         let tcs: Vec<serde_json::Value> = msg
@@ -248,7 +281,7 @@ mod tests {
         });
 
         let resp = provider.parse_response(&body).unwrap();
-        assert_eq!(resp.message.content, "Hi there!");
+        assert_eq!(resp.message.content.text(), "Hi there!");
         assert_eq!(resp.stop_reason, StopReason::EndTurn);
     }
 }

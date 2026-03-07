@@ -170,6 +170,20 @@ pub fn derive_tool_key(master_key: &MasterKey) -> MasterKey {
     MasterKey::from_bytes(okm)
 }
 
+/// Derive a tenant-specific encryption key using HKDF-SHA256.
+///
+/// Uses the domain string `"aivyx-tenant:{tenant_id}"` as the HKDF info parameter,
+/// ensuring each tenant gets a cryptographically independent key from the same master.
+/// Returns a full `MasterKey` suitable for use with `EncryptedStore`.
+pub fn derive_tenant_key(master_key: &MasterKey, tenant_id: &str) -> MasterKey {
+    let hk = Hkdf::<Sha256>::new(None, master_key.expose_secret());
+    let mut okm = [0u8; 32];
+    let info = format!("aivyx-tenant:{}", tenant_id);
+    hk.expand(info.as_bytes(), &mut okm)
+        .expect("32 bytes is a valid HKDF-SHA256 output length");
+    MasterKey::from_bytes(okm)
+}
+
 /// Derive a dedicated encryption key for the team session subsystem using HKDF-SHA256.
 ///
 /// Uses the domain string `"aivyx-team-session-key"` as the HKDF info parameter
@@ -301,6 +315,32 @@ mod tests {
         // Differs from audit key
         let audit_key = derive_audit_key(&master);
         assert_ne!(tool_key1.expose_secret(), audit_key.as_slice());
+    }
+
+    #[test]
+    fn derive_tenant_key_is_deterministic_and_distinct() {
+        let master = MasterKey::generate();
+        let tenant_key1 = derive_tenant_key(&master, "tenant-abc");
+        let tenant_key2 = derive_tenant_key(&master, "tenant-abc");
+        // Deterministic
+        assert_eq!(tenant_key1.expose_secret(), tenant_key2.expose_secret());
+        // Differs from master
+        assert_ne!(master.expose_secret(), tenant_key1.expose_secret());
+        // Differs from other domain keys
+        let mem_key = derive_memory_key(&master);
+        assert_ne!(tenant_key1.expose_secret(), mem_key.expose_secret());
+        let task_key = derive_task_key(&master);
+        assert_ne!(tenant_key1.expose_secret(), task_key.expose_secret());
+        let audit_key = derive_audit_key(&master);
+        assert_ne!(tenant_key1.expose_secret(), audit_key.as_slice());
+    }
+
+    #[test]
+    fn different_tenant_ids_yield_different_keys() {
+        let master = MasterKey::generate();
+        let key_a = derive_tenant_key(&master, "tenant-a");
+        let key_b = derive_tenant_key(&master, "tenant-b");
+        assert_ne!(key_a.expose_secret(), key_b.expose_secret());
     }
 
     #[test]

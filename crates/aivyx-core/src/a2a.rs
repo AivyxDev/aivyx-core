@@ -168,6 +168,44 @@ pub struct A2aArtifact {
 }
 
 // ---------------------------------------------------------------------------
+// A2A Streaming (tasks/sendSubscribe) types
+// ---------------------------------------------------------------------------
+
+/// Server-Sent Event for task status updates.
+///
+/// Used by `tasks/sendSubscribe` to stream incremental task state changes
+/// to the client via SSE.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskStatusUpdateEvent {
+    /// Task ID this event relates to.
+    pub id: String,
+    /// Updated task status.
+    pub status: A2aTaskStatus,
+    /// Whether this is the final event (task reached a terminal state).
+    #[serde(rename = "final")]
+    pub is_final: bool,
+}
+
+// ---------------------------------------------------------------------------
+// A2A Push Notifications
+// ---------------------------------------------------------------------------
+
+/// Configuration for push notifications on a specific task.
+///
+/// When set, the A2A server sends a POST request to the specified URL
+/// whenever the task's status changes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushNotificationConfig {
+    /// Webhook URL to receive push notifications.
+    pub url: String,
+    /// Optional authentication token sent as `Authorization: Bearer <token>`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // JSON-RPC 2.0 envelope (used by A2A task API)
 // ---------------------------------------------------------------------------
 
@@ -321,5 +359,73 @@ mod tests {
         assert_eq!(json["error"]["code"], -32601);
         assert_eq!(json["error"]["message"], "method not found");
         assert!(json["result"].is_null());
+    }
+
+    #[test]
+    fn task_status_update_event_serde() {
+        let event = TaskStatusUpdateEvent {
+            id: "task-123".into(),
+            status: A2aTaskStatus {
+                state: A2aTaskState::Working,
+                message: Some(A2aMessage {
+                    role: A2aRole::Agent,
+                    parts: vec![A2aPart::Text {
+                        text: "Processing...".into(),
+                    }],
+                }),
+                timestamp: "2026-03-07T12:00:00Z".into(),
+            },
+            is_final: false,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["id"], "task-123");
+        assert_eq!(json["status"]["state"], "working");
+        assert_eq!(json["final"], false);
+
+        let restored: TaskStatusUpdateEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.id, "task-123");
+        assert!(!restored.is_final);
+    }
+
+    #[test]
+    fn task_status_update_event_final() {
+        let event = TaskStatusUpdateEvent {
+            id: "task-456".into(),
+            status: A2aTaskStatus {
+                state: A2aTaskState::Completed,
+                message: None,
+                timestamp: "2026-03-07T12:01:00Z".into(),
+            },
+            is_final: true,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["final"], true);
+        assert_eq!(json["status"]["state"], "completed");
+    }
+
+    #[test]
+    fn push_notification_config_serde() {
+        let config = PushNotificationConfig {
+            url: "https://example.com/webhook".into(),
+            token: Some("secret-token".into()),
+        };
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["url"], "https://example.com/webhook");
+        assert_eq!(json["token"], "secret-token");
+
+        let restored: PushNotificationConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.url, "https://example.com/webhook");
+        assert_eq!(restored.token.as_deref(), Some("secret-token"));
+    }
+
+    #[test]
+    fn push_notification_config_without_token() {
+        let config = PushNotificationConfig {
+            url: "https://example.com/hook".into(),
+            token: None,
+        };
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["url"], "https://example.com/hook");
+        assert!(json.get("token").is_none());
     }
 }

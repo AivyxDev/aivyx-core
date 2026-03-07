@@ -88,6 +88,8 @@ impl Tool for MemoryStoreTool {
             Some("preference") => MemoryKind::Preference,
             Some("session_summary") => MemoryKind::SessionSummary,
             Some("procedure") => MemoryKind::Procedure,
+            Some("decision") => MemoryKind::Decision,
+            Some("outcome") => MemoryKind::Outcome,
             Some(other) => MemoryKind::Custom(other.to_string()),
             None => return Err(AivyxError::Agent("memory_store: missing 'kind'".into())),
         };
@@ -289,7 +291,7 @@ impl Tool for MemoryTripleTool {
             .as_str()
             .ok_or_else(|| AivyxError::Agent("memory_triple: missing 'action'".into()))?;
 
-        let mgr = self.manager.lock().await;
+        let mut mgr = self.manager.lock().await;
 
         match action {
             "add" => {
@@ -353,6 +355,116 @@ impl Tool for MemoryTripleTool {
     }
 }
 
+// ---------------------------------------------------------------------------
+// memory_retrieve
+// ---------------------------------------------------------------------------
+
+/// Tool for agentic RAG retrieval with automatic strategy routing.
+pub struct MemoryRetrieveTool {
+    id: ToolId,
+    manager: Arc<Mutex<MemoryManager>>,
+}
+
+impl MemoryRetrieveTool {
+    pub fn new(manager: Arc<Mutex<MemoryManager>>) -> Self {
+        Self {
+            id: ToolId::new(),
+            manager,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for MemoryRetrieveTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "memory_retrieve"
+    }
+
+    fn description(&self) -> &str {
+        "Retrieve relevant information using agentic RAG with automatic strategy routing. Routes queries to vector, keyword, or graph retrieval based on query analysis."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The query to retrieve information for"
+                },
+                "strategy": {
+                    "type": "string",
+                    "enum": ["auto", "vector", "keyword", "graph"],
+                    "description": "Retrieval strategy to use (default: auto)"
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default: 5)"
+                }
+            },
+            "required": ["query"]
+        })
+    }
+
+    fn required_scope(&self) -> Option<CapabilityScope> {
+        Some(CapabilityScope::Custom("memory".into()))
+    }
+
+    async fn execute(&self, input: serde_json::Value) -> Result<serde_json::Value> {
+        use crate::retrieval::{RetrievalRouter, RetrievalStrategy};
+
+        let query = input["query"]
+            .as_str()
+            .ok_or_else(|| AivyxError::Agent("memory_retrieve: missing 'query'".into()))?;
+
+        let top_k = input["top_k"].as_u64().unwrap_or(5) as usize;
+
+        let strategy_str = input["strategy"].as_str().unwrap_or("auto");
+        let strategy = match strategy_str {
+            "vector" => RetrievalStrategy::Vector,
+            "keyword" => RetrievalStrategy::Keyword,
+            "graph" => RetrievalStrategy::Graph,
+            "auto" | _ => RetrievalRouter::route(query),
+        };
+
+        let strategy_name = match &strategy {
+            RetrievalStrategy::Vector => "vector",
+            RetrievalStrategy::Keyword => "keyword",
+            RetrievalStrategy::Graph => "graph",
+            RetrievalStrategy::MultiSource(_) => "multi_source",
+        };
+
+        let mut mgr = self.manager.lock().await;
+        let results = RetrievalRouter::retrieve(&mut mgr, query, &strategy, top_k).await?;
+
+        let result_values: Vec<serde_json::Value> = results
+            .iter()
+            .map(|r| {
+                let source_name = match &r.source {
+                    crate::retrieval::RetrievalSource::VectorMemory => "vector_memory",
+                    crate::retrieval::RetrievalSource::KnowledgeTriple => "knowledge_triple",
+                    crate::retrieval::RetrievalSource::GraphTraversal => "graph_traversal",
+                };
+                serde_json::json!({
+                    "content": r.content,
+                    "source": source_name,
+                    "relevance": r.relevance,
+                })
+            })
+            .collect();
+
+        Ok(serde_json::json!({
+            "results": result_values,
+            "count": result_values.len(),
+            "strategy": strategy_name,
+        }))
+    }
+}
+
 /// Register all memory tools into a `ToolRegistry`.
 pub fn register_memory_tools(
     registry: &mut aivyx_core::ToolRegistry,
@@ -367,7 +479,11 @@ pub fn register_memory_tools(
         Arc::clone(&manager),
         agent_id,
     )));
-    registry.register(Box::new(MemoryTripleTool::new(manager, agent_id)));
+    registry.register(Box::new(MemoryTripleTool::new(
+        Arc::clone(&manager),
+        agent_id,
+    )));
+    registry.register(Box::new(MemoryRetrieveTool::new(manager)));
 }
 
 #[cfg(test)]
@@ -378,6 +494,7 @@ mod tests {
         MemoryStoreTool,
         MemorySearchTool,
         MemoryTripleTool,
+        MemoryRetrieveTool,
         std::path::PathBuf,
     ) {
         use crate::store::MemoryStore;
@@ -414,14 +531,15 @@ mod tests {
 
         let store_tool = MemoryStoreTool::new(Arc::clone(&manager), agent_id);
         let search_tool = MemorySearchTool::new(Arc::clone(&manager), agent_id);
-        let triple_tool = MemoryTripleTool::new(manager, agent_id);
+        let triple_tool = MemoryTripleTool::new(Arc::clone(&manager), agent_id);
+        let retrieve_tool = MemoryRetrieveTool::new(manager);
 
-        (store_tool, search_tool, triple_tool, dir)
+        (store_tool, search_tool, triple_tool, retrieve_tool, dir)
     }
 
     #[test]
     fn store_tool_schema() {
-        let (tool, _, _, dir) = make_tool_set();
+        let (tool, _, _, _, dir) = make_tool_set();
         assert_eq!(tool.name(), "memory_store");
         let schema = tool.input_schema();
         assert_eq!(schema["type"], "object");
@@ -432,7 +550,7 @@ mod tests {
 
     #[test]
     fn search_tool_schema() {
-        let (_, tool, _, dir) = make_tool_set();
+        let (_, tool, _, _, dir) = make_tool_set();
         assert_eq!(tool.name(), "memory_search");
         let schema = tool.input_schema();
         assert!(schema["properties"]["query"].is_object());
@@ -441,7 +559,7 @@ mod tests {
 
     #[test]
     fn triple_tool_schema() {
-        let (_, _, tool, dir) = make_tool_set();
+        let (_, _, tool, _, dir) = make_tool_set();
         assert_eq!(tool.name(), "memory_triple");
         let schema = tool.input_schema();
         assert!(schema["properties"]["action"].is_object());
@@ -450,7 +568,7 @@ mod tests {
 
     #[test]
     fn store_tool_required_scope() {
-        let (tool, _, _, dir) = make_tool_set();
+        let (tool, _, _, _, dir) = make_tool_set();
         let scope = tool.required_scope().unwrap();
         assert!(matches!(scope, CapabilityScope::Custom(ref name) if name == "memory"));
         std::fs::remove_dir_all(&dir).ok();
@@ -458,7 +576,7 @@ mod tests {
 
     #[test]
     fn search_tool_required_scope() {
-        let (_, tool, _, dir) = make_tool_set();
+        let (_, tool, _, _, dir) = make_tool_set();
         let scope = tool.required_scope().unwrap();
         assert!(matches!(scope, CapabilityScope::Custom(ref name) if name == "memory"));
         std::fs::remove_dir_all(&dir).ok();
@@ -466,7 +584,7 @@ mod tests {
 
     #[test]
     fn triple_tool_required_scope() {
-        let (_, _, tool, dir) = make_tool_set();
+        let (_, _, tool, _, dir) = make_tool_set();
         let scope = tool.required_scope().unwrap();
         assert!(matches!(scope, CapabilityScope::Custom(ref name) if name == "memory"));
         std::fs::remove_dir_all(&dir).ok();
@@ -474,17 +592,40 @@ mod tests {
 
     #[test]
     fn tool_names_unique() {
-        let (s, m, t, dir) = make_tool_set();
-        let names = [s.name(), m.name(), t.name()];
+        let (s, m, t, r, dir) = make_tool_set();
+        let names = [s.name(), m.name(), t.name(), r.name()];
         let mut sorted = names.to_vec();
         sorted.sort();
         sorted.dedup();
-        assert_eq!(sorted.len(), 3);
+        assert_eq!(sorted.len(), 4);
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn register_adds_all_three() {
+    fn retrieve_tool_schema() {
+        let (_, _, _, tool, dir) = make_tool_set();
+        assert_eq!(tool.name(), "memory_retrieve");
+        let schema = tool.input_schema();
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"]["query"].is_object());
+        assert!(schema["properties"]["strategy"].is_object());
+        assert!(schema["properties"]["top_k"].is_object());
+        let required = schema["required"].as_array().unwrap();
+        assert_eq!(required.len(), 1);
+        assert_eq!(required[0], "query");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn retrieve_tool_required_scope() {
+        let (_, _, _, tool, dir) = make_tool_set();
+        let scope = tool.required_scope().unwrap();
+        assert!(matches!(scope, CapabilityScope::Custom(ref name) if name == "memory"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn register_adds_all_four() {
         use crate::store::MemoryStore;
         use aivyx_crypto::MasterKey;
         use async_trait::async_trait;
@@ -519,10 +660,11 @@ mod tests {
         let mut registry = aivyx_core::ToolRegistry::new();
         register_memory_tools(&mut registry, manager, AgentId::new());
 
-        assert_eq!(registry.list().len(), 3);
+        assert_eq!(registry.list().len(), 4);
         assert!(registry.get_by_name("memory_store").is_some());
         assert!(registry.get_by_name("memory_search").is_some());
         assert!(registry.get_by_name("memory_triple").is_some());
+        assert!(registry.get_by_name("memory_retrieve").is_some());
 
         std::fs::remove_dir_all(&dir).ok();
     }

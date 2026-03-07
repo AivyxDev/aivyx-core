@@ -9,7 +9,8 @@ use tracing::debug;
 use aivyx_core::{AivyxError, Result};
 
 use crate::message::{
-    ChatMessage, ChatRequest, ChatResponse, Role, StopReason, TokenUsage, ToolCall,
+    ChatMessage, ChatRequest, ChatResponse, Content, ContentBlock, ImageSource, Role, StopReason,
+    TokenUsage, ToolCall,
 };
 use crate::provider::{LlmProvider, StreamEvent};
 
@@ -67,16 +68,51 @@ impl ClaudeProvider {
     fn map_message(&self, msg: &ChatMessage) -> Option<serde_json::Value> {
         match msg.role {
             Role::System => None, // System is handled separately in Claude API
-            Role::User => Some(serde_json::json!({
-                "role": "user",
-                "content": msg.content,
-            })),
+            Role::User => {
+                let api_content = match &msg.content {
+                    Content::Text(s) => serde_json::json!(s),
+                    Content::Blocks(blocks) => {
+                        let mapped: Vec<serde_json::Value> = blocks
+                            .iter()
+                            .filter_map(|b| match b {
+                                ContentBlock::Text { text } => {
+                                    Some(serde_json::json!({"type": "text", "text": text}))
+                                }
+                                ContentBlock::Image { source } => Some(match source {
+                                    ImageSource::Base64 { media_type, data } => {
+                                        serde_json::json!({
+                                            "type": "image",
+                                            "source": {
+                                                "type": "base64",
+                                                "media_type": media_type,
+                                                "data": data,
+                                            }
+                                        })
+                                    }
+                                    ImageSource::Url { url } => {
+                                        serde_json::json!({
+                                            "type": "image",
+                                            "source": {
+                                                "type": "url",
+                                                "url": url,
+                                            }
+                                        })
+                                    }
+                                }),
+                            })
+                            .collect();
+                        serde_json::json!(mapped)
+                    }
+                };
+                Some(serde_json::json!({"role": "user", "content": api_content}))
+            }
             Role::Assistant => {
                 let mut content: Vec<serde_json::Value> = Vec::new();
-                if !msg.content.is_empty() {
+                let text = msg.content.text();
+                if !text.is_empty() {
                     content.push(serde_json::json!({
                         "type": "text",
-                        "text": msg.content,
+                        "text": text,
                     }));
                 }
                 for tc in &msg.tool_calls {
@@ -395,7 +431,7 @@ mod tests {
         });
 
         let resp = provider.parse_response(&body).unwrap();
-        assert_eq!(resp.message.content, "Hello!");
+        assert_eq!(resp.message.content.text(), "Hello!");
         assert_eq!(resp.stop_reason, StopReason::EndTurn);
         assert_eq!(resp.usage.input_tokens, 10);
     }

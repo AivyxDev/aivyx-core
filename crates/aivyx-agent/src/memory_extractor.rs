@@ -121,7 +121,7 @@ pub async fn extract_from_turn(
     };
 
     let response = provider.chat(&request).await?;
-    let text = response.message.content.trim();
+    let text = response.message.content.text().trim();
 
     // Parse JSON — be tolerant of markdown fences
     let json_text = strip_markdown_fences(text);
@@ -366,6 +366,81 @@ fn apply_correction_to_profile(
     Ok(())
 }
 
+/// Prompt for extracting knowledge triples from session summaries.
+///
+/// Unlike `EXTRACTION_PROMPT`, this focuses exclusively on entity relationships
+/// (triples) rather than facts/preferences — those are already captured per-turn.
+const SUMMARY_EXTRACTION_PROMPT: &str = r#"You are a knowledge graph extraction system. Extract entity relationships (subject-predicate-object triples) from the session summary below.
+
+Focus on:
+- Who/what is related to what (e.g., "Julian" - "works_on" - "Aivyx")
+- Tools/technologies and their relationships (e.g., "Aivyx" - "uses" - "Rust")
+- Decisions and their subjects (e.g., "team" - "chose" - "PostgreSQL")
+- Project relationships (e.g., "aivyx-core" - "depends_on" - "aivyx-crypto")
+
+Do NOT extract:
+- Transient details (specific commands run, temporary file paths)
+- Subjective opinions or preferences (already captured elsewhere)
+
+Respond with ONLY a JSON object (no markdown, no explanation):
+{"triples": [{"subject": "X", "predicate": "relation", "object": "Y"}]}
+
+If there are no meaningful relationships, respond with:
+{"triples": []}
+"#;
+
+/// Response shape for summary extraction — triples only.
+#[derive(Debug, Deserialize)]
+struct SummaryExtractionResult {
+    #[serde(default)]
+    triples: Vec<TripleExtraction>,
+}
+
+/// Extract knowledge triples from a session summary.
+///
+/// Unlike [`extract_from_turn()`] which extracts from raw conversation, this
+/// operates on the condensed session summary and focuses exclusively on triples
+/// (entity relationships) rather than facts/preferences (which were already
+/// extracted per-turn during the session).
+pub async fn extract_from_summary(
+    provider: &dyn LlmProvider,
+    summary: &str,
+) -> Result<Vec<TripleExtraction>> {
+    if summary.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let request = ChatRequest {
+        system_prompt: Some(SUMMARY_EXTRACTION_PROMPT.to_string()),
+        messages: vec![ChatMessage::user(format!(
+            "Extract entity relationships from this session summary:\n\n{summary}"
+        ))],
+        tools: vec![],
+        model: None,
+        max_tokens: 512,
+    };
+
+    let response = provider.chat(&request).await?;
+    let text = response.message.content.text().trim();
+    let json_text = strip_markdown_fences(text);
+
+    match serde_json::from_str::<SummaryExtractionResult>(json_text) {
+        Ok(result) => {
+            if !result.triples.is_empty() {
+                info!(
+                    "Extracted {} triples from session summary",
+                    result.triples.len()
+                );
+            }
+            Ok(result.triples)
+        }
+        Err(e) => {
+            debug!("Failed to parse summary extraction result: {e} — text: {json_text}");
+            Ok(Vec::new())
+        }
+    }
+}
+
 /// Strip markdown code fences (```json ... ```) if present.
 fn strip_markdown_fences(text: &str) -> &str {
     let trimmed = text.trim();
@@ -476,5 +551,42 @@ mod tests {
         assert_eq!(result.preferences.len(), 1);
         assert_eq!(result.triples.len(), 1);
         assert!(result.corrections.is_empty());
+    }
+
+    #[test]
+    fn parse_summary_extraction_result() {
+        let json = r#"{
+            "triples": [
+                {"subject": "Julian", "predicate": "works_on", "object": "Aivyx"},
+                {"subject": "Aivyx", "predicate": "uses", "object": "Rust"},
+                {"subject": "aivyx-core", "predicate": "depends_on", "object": "aivyx-crypto"}
+            ]
+        }"#;
+
+        let result: SummaryExtractionResult = serde_json::from_str(json).unwrap();
+        assert_eq!(result.triples.len(), 3);
+        assert_eq!(result.triples[0].subject, "Julian");
+        assert_eq!(result.triples[0].predicate, "works_on");
+        assert_eq!(result.triples[0].object, "Aivyx");
+        assert_eq!(result.triples[2].predicate, "depends_on");
+    }
+
+    #[test]
+    fn parse_summary_extraction_empty() {
+        let json = r#"{"triples": []}"#;
+        let result: SummaryExtractionResult = serde_json::from_str(json).unwrap();
+        assert!(result.triples.is_empty());
+    }
+
+    #[test]
+    fn summary_extraction_prompt_contains_key_instructions() {
+        assert!(SUMMARY_EXTRACTION_PROMPT.contains("knowledge graph"));
+        assert!(SUMMARY_EXTRACTION_PROMPT.contains("subject"));
+        assert!(SUMMARY_EXTRACTION_PROMPT.contains("predicate"));
+        assert!(SUMMARY_EXTRACTION_PROMPT.contains("object"));
+        assert!(SUMMARY_EXTRACTION_PROMPT.contains("triples"));
+        // Should NOT ask for facts/preferences (already captured per-turn)
+        assert!(!SUMMARY_EXTRACTION_PROMPT.contains("\"facts\""));
+        assert!(!SUMMARY_EXTRACTION_PROMPT.contains("\"preferences\""));
     }
 }

@@ -117,6 +117,82 @@ impl FederationClient {
         })
     }
 
+    /// Relay a chat message with automatic failover.
+    /// Tries the preferred peer first (from req.peer_id), then falls back to
+    /// other healthy peers with the given capability.
+    pub async fn relay_chat_with_failover(
+        &self,
+        req: &RelayChatRequest,
+        capability: &str,
+    ) -> Result<RelayChatResponse, AivyxError> {
+        let candidates = self.build_failover_candidates(&req.peer_id, capability).await;
+
+        let mut last_error = AivyxError::Other("no failover candidates available".into());
+
+        for peer_id in &candidates {
+            let mut patched_req = req.clone();
+            patched_req.peer_id = peer_id.clone();
+
+            match self.relay_chat(&patched_req).await {
+                Ok(resp) => return Ok(resp),
+                Err(e) => {
+                    if is_retryable_error(&e) {
+                        self.mark_unhealthy(peer_id).await;
+                        tracing::warn!(peer = %peer_id, error = %e, "failover: retryable error, trying next peer");
+                        last_error = e;
+                    } else {
+                        // 4xx or non-retryable error: return immediately.
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        Err(last_error)
+    }
+
+    /// Relay a task with automatic failover.
+    pub async fn relay_task_with_failover(
+        &self,
+        req: &RelayTaskRequest,
+        capability: &str,
+    ) -> Result<RelayTaskResponse, AivyxError> {
+        let candidates = self.build_failover_candidates(&req.peer_id, capability).await;
+
+        let mut last_error = AivyxError::Other("no failover candidates available".into());
+
+        for peer_id in &candidates {
+            let mut patched_req = req.clone();
+            patched_req.peer_id = peer_id.clone();
+
+            match self.relay_task(&patched_req).await {
+                Ok(resp) => return Ok(resp),
+                Err(e) => {
+                    if is_retryable_error(&e) {
+                        self.mark_unhealthy(peer_id).await;
+                        tracing::warn!(peer = %peer_id, error = %e, "failover: retryable error, trying next peer");
+                        last_error = e;
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        Err(last_error)
+    }
+
+    /// Build the ordered list of failover candidates.
+    /// Preferred peer first (if healthy), then other healthy peers for the capability,
+    /// truncated to max_attempts.
+    async fn build_failover_candidates(&self, preferred: &str, capability: &str) -> Vec<String> {
+        build_candidate_list(
+            preferred,
+            &self.healthy_peers_for(capability).await,
+            self.failover_config().max_attempts,
+        )
+    }
+
     /// Search memory across federated peers.
     pub async fn federated_search(
         &self,
@@ -215,5 +291,106 @@ impl FederationClient {
                 kind: r["kind"].as_str().unwrap_or("unknown").to_string(),
             })
             .collect())
+    }
+}
+
+/// Check if an error is retryable (connection error or 5xx status).
+fn is_retryable_error(err: &AivyxError) -> bool {
+    let msg = err.to_string();
+    // Connection-related errors from reqwest
+    if msg.contains("connection")
+        || msg.contains("Connection")
+        || msg.contains("timed out")
+        || msg.contains("timeout")
+        || msg.contains("dns")
+        || msg.contains("DNS")
+        || msg.contains("unreachable")
+    {
+        return true;
+    }
+    // 5xx status codes in error messages
+    for code in [500, 501, 502, 503, 504] {
+        if msg.contains(&format!("{code}")) {
+            // Make sure it looks like a status code context, not a random number.
+            if msg.contains(&format!("returned {code}"))
+                || msg.contains(&format!("{code} "))
+                || msg.contains(&format!("{code}:"))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Build the ordered candidate list for failover.
+/// Preferred peer first (if present in healthy list), then remaining healthy peers,
+/// truncated to max_attempts.
+fn build_candidate_list(preferred: &str, healthy: &[String], max_attempts: usize) -> Vec<String> {
+    let mut candidates = Vec::new();
+
+    // Preferred peer first, if it's in the healthy list.
+    if healthy.contains(&preferred.to_string()) {
+        candidates.push(preferred.to_string());
+    }
+
+    // Then the rest, excluding preferred.
+    for peer in healthy {
+        if peer != preferred {
+            candidates.push(peer.clone());
+        }
+    }
+
+    candidates.truncate(max_attempts);
+    candidates
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failover_builds_candidate_list() {
+        // Preferred peer is healthy and should be first.
+        let healthy = vec!["b".to_string(), "a".to_string(), "c".to_string()];
+        let candidates = build_candidate_list("a", &healthy, 3);
+        assert_eq!(candidates[0], "a");
+        assert_eq!(candidates.len(), 3);
+
+        // Preferred peer not in healthy list.
+        let candidates = build_candidate_list("x", &healthy, 3);
+        assert_eq!(candidates, vec!["b", "a", "c"]);
+
+        // max_attempts truncates.
+        let candidates = build_candidate_list("a", &healthy, 2);
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0], "a");
+
+        // Empty healthy list.
+        let candidates = build_candidate_list("a", &[], 3);
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn retryable_error_detection() {
+        assert!(is_retryable_error(&AivyxError::Other(
+            "relay chat to peer-a: connection refused".into()
+        )));
+        assert!(is_retryable_error(&AivyxError::Other(
+            "peer peer-a chat returned 502: bad gateway".into()
+        )));
+        assert!(is_retryable_error(&AivyxError::Other(
+            "peer peer-a chat returned 503: service unavailable".into()
+        )));
+        assert!(is_retryable_error(&AivyxError::Other(
+            "request timed out".into()
+        )));
+        // 4xx should not be retryable.
+        assert!(!is_retryable_error(&AivyxError::Other(
+            "peer peer-a chat returned 400: bad request".into()
+        )));
+        assert!(!is_retryable_error(&AivyxError::Other(
+            "peer peer-a chat returned 404: not found".into()
+        )));
     }
 }

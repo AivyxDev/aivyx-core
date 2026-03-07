@@ -395,6 +395,142 @@ pub enum AuditEvent {
         /// Session identifier.
         session_id: String,
     },
+
+    // --- Phase 5: Enterprise & Scale events ---
+
+    /// A new tenant was created.
+    TenantCreated {
+        /// Tenant identifier.
+        tenant_id: String,
+        /// Human-readable tenant name.
+        name: String,
+    },
+    /// A tenant was suspended (API keys disabled, requests rejected).
+    TenantSuspended {
+        /// Tenant identifier.
+        tenant_id: String,
+        /// Why the tenant was suspended.
+        reason: String,
+    },
+    /// A tenant was soft-deleted.
+    TenantDeleted {
+        /// Tenant identifier.
+        tenant_id: String,
+    },
+    /// A tenant API key was created.
+    ApiKeyCreated {
+        /// Tenant this key belongs to.
+        tenant_id: String,
+        /// Unique key identifier (not the secret).
+        key_id: String,
+        /// Permitted scopes for this key.
+        scopes: Vec<String>,
+    },
+    /// A tenant API key was revoked.
+    ApiKeyRevoked {
+        /// Tenant this key belongs to.
+        tenant_id: String,
+        /// Unique key identifier.
+        key_id: String,
+    },
+    /// A tenant resource quota was exceeded.
+    QuotaExceeded {
+        /// Tenant identifier.
+        tenant_id: String,
+        /// Which quota was hit (e.g., "sessions_per_day", "storage_mb").
+        quota_type: String,
+        /// The configured limit.
+        limit: u64,
+        /// The current usage at the time of violation.
+        current: u64,
+    },
+    /// A cost budget threshold was exceeded.
+    BudgetExceeded {
+        /// Tenant identifier (empty for global budgets).
+        tenant_id: String,
+        /// Budget scope (e.g., "agent_daily", "tenant_monthly").
+        budget_type: String,
+        /// Spending limit in USD.
+        limit_usd: f64,
+        /// Amount spent in USD.
+        spent_usd: f64,
+    },
+    /// A cost alert was fired (e.g., at 80% threshold).
+    CostAlertFired {
+        /// Tenant identifier.
+        tenant_id: String,
+        /// Percentage threshold that was crossed.
+        threshold_pct: f64,
+        /// Amount spent in USD.
+        spent_usd: f64,
+        /// Budget limit in USD.
+        limit_usd: f64,
+    },
+    /// A multi-stage workflow was created.
+    WorkflowCreated {
+        /// Workflow identifier.
+        workflow_id: String,
+        /// Human-readable workflow name.
+        name: String,
+        /// Number of stages in the workflow.
+        stages: usize,
+    },
+    /// A workflow completed (all stages finished or a terminal failure).
+    WorkflowCompleted {
+        /// Workflow identifier.
+        workflow_id: String,
+        /// Terminal status (e.g., "completed", "failed", "cancelled").
+        status: String,
+    },
+    /// An inbound webhook was received and dispatched.
+    WebhookReceived {
+        /// Name of the trigger configuration that matched.
+        trigger_name: String,
+        /// Client IP that sent the webhook.
+        source_ip: String,
+    },
+    /// An encrypted backup completed successfully.
+    BackupCompleted {
+        /// Size of the backup archive in bytes.
+        size_bytes: u64,
+        /// Where the backup was stored (e.g., S3 bucket/key).
+        destination: String,
+    },
+    /// An encrypted backup failed.
+    BackupFailed {
+        /// Why the backup failed.
+        reason: String,
+    },
+    /// An SSO (OIDC/SAML) login succeeded.
+    SsoLoginSucceeded {
+        /// Authenticated user identifier.
+        user_id: String,
+        /// Identity provider name (e.g., "okta", "azure-ad").
+        provider: String,
+    },
+    /// An SSO login attempt failed.
+    SsoLoginFailed {
+        /// Why the login failed.
+        reason: String,
+        /// Identity provider name.
+        provider: String,
+    },
+    /// A capability audit report was generated.
+    CapabilityAuditGenerated {
+        /// Number of warning findings.
+        warnings_count: usize,
+        /// Number of agents scanned.
+        agents_scanned: usize,
+    },
+    /// A security alert was triggered (e.g., tool abuse detection).
+    SecurityAlert {
+        /// Type of alert (e.g., "HighFrequency", "RepeatedDenials", "ScopeEscalation").
+        alert_type: String,
+        /// Agent that triggered the alert.
+        agent_id: aivyx_core::AgentId,
+        /// Human-readable details.
+        details: String,
+    },
 }
 
 #[cfg(test)]
@@ -1129,6 +1265,309 @@ mod tests {
         {
             assert_eq!(team_name, "dev-team");
             assert_eq!(session_id, "sess-abc-123");
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    // --- Phase 5 audit event tests ---
+
+    #[test]
+    fn tenant_created_serde_roundtrip() {
+        let event = AuditEvent::TenantCreated {
+            tenant_id: "t-abc-123".into(),
+            name: "Acme Corp".into(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::TenantCreated { tenant_id, name } = restored {
+            assert_eq!(tenant_id, "t-abc-123");
+            assert_eq!(name, "Acme Corp");
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn tenant_suspended_serde_roundtrip() {
+        let event = AuditEvent::TenantSuspended {
+            tenant_id: "t-abc-123".into(),
+            reason: "payment overdue".into(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::TenantSuspended { reason, .. } = restored {
+            assert_eq!(reason, "payment overdue");
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn tenant_deleted_serde_roundtrip() {
+        let event = AuditEvent::TenantDeleted {
+            tenant_id: "t-abc-123".into(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"TenantDeleted\""));
+        let restored: AuditEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(restored, AuditEvent::TenantDeleted { .. }));
+    }
+
+    #[test]
+    fn api_key_created_serde_roundtrip() {
+        let event = AuditEvent::ApiKeyCreated {
+            tenant_id: "t-abc".into(),
+            key_id: "k-xyz".into(),
+            scopes: vec!["Chat".into(), "Memory".into()],
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::ApiKeyCreated {
+            key_id, scopes, ..
+        } = restored
+        {
+            assert_eq!(key_id, "k-xyz");
+            assert_eq!(scopes, vec!["Chat", "Memory"]);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn api_key_revoked_serde_roundtrip() {
+        let event = AuditEvent::ApiKeyRevoked {
+            tenant_id: "t-abc".into(),
+            key_id: "k-xyz".into(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"ApiKeyRevoked\""));
+        let restored: AuditEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(restored, AuditEvent::ApiKeyRevoked { .. }));
+    }
+
+    #[test]
+    fn quota_exceeded_serde_roundtrip() {
+        let event = AuditEvent::QuotaExceeded {
+            tenant_id: "t-abc".into(),
+            quota_type: "sessions_per_day".into(),
+            limit: 100,
+            current: 101,
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::QuotaExceeded {
+            quota_type,
+            limit,
+            current,
+            ..
+        } = restored
+        {
+            assert_eq!(quota_type, "sessions_per_day");
+            assert_eq!(limit, 100);
+            assert_eq!(current, 101);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn budget_exceeded_serde_roundtrip() {
+        let event = AuditEvent::BudgetExceeded {
+            tenant_id: "t-abc".into(),
+            budget_type: "tenant_daily".into(),
+            limit_usd: 10.0,
+            spent_usd: 10.5,
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::BudgetExceeded {
+            budget_type,
+            limit_usd,
+            spent_usd,
+            ..
+        } = restored
+        {
+            assert_eq!(budget_type, "tenant_daily");
+            assert!((limit_usd - 10.0).abs() < f64::EPSILON);
+            assert!((spent_usd - 10.5).abs() < f64::EPSILON);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn cost_alert_fired_serde_roundtrip() {
+        let event = AuditEvent::CostAlertFired {
+            tenant_id: "t-abc".into(),
+            threshold_pct: 80.0,
+            spent_usd: 8.0,
+            limit_usd: 10.0,
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::CostAlertFired {
+            threshold_pct,
+            spent_usd,
+            ..
+        } = restored
+        {
+            assert!((threshold_pct - 80.0).abs() < f64::EPSILON);
+            assert!((spent_usd - 8.0).abs() < f64::EPSILON);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn workflow_created_serde_roundtrip() {
+        let event = AuditEvent::WorkflowCreated {
+            workflow_id: "wf-123".into(),
+            name: "deploy-pipeline".into(),
+            stages: 4,
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::WorkflowCreated {
+            name, stages, ..
+        } = restored
+        {
+            assert_eq!(name, "deploy-pipeline");
+            assert_eq!(stages, 4);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn workflow_completed_serde_roundtrip() {
+        let event = AuditEvent::WorkflowCompleted {
+            workflow_id: "wf-123".into(),
+            status: "completed".into(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"WorkflowCompleted\""));
+        let restored: AuditEvent = serde_json::from_str(&json).unwrap();
+        if let AuditEvent::WorkflowCompleted { status, .. } = restored {
+            assert_eq!(status, "completed");
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn webhook_received_serde_roundtrip() {
+        let event = AuditEvent::WebhookReceived {
+            trigger_name: "github-push".into(),
+            source_ip: "192.168.1.1".into(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::WebhookReceived {
+            trigger_name,
+            source_ip,
+        } = restored
+        {
+            assert_eq!(trigger_name, "github-push");
+            assert_eq!(source_ip, "192.168.1.1");
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn backup_completed_serde_roundtrip() {
+        let event = AuditEvent::BackupCompleted {
+            size_bytes: 1_048_576,
+            destination: "s3://aivyx-backups/2026-03-07.tar.gz.enc".into(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::BackupCompleted {
+            size_bytes,
+            destination,
+        } = restored
+        {
+            assert_eq!(size_bytes, 1_048_576);
+            assert!(destination.contains("s3://"));
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn backup_failed_serde_roundtrip() {
+        let event = AuditEvent::BackupFailed {
+            reason: "S3 connection timeout".into(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"BackupFailed\""));
+        let restored: AuditEvent = serde_json::from_str(&json).unwrap();
+        if let AuditEvent::BackupFailed { reason } = restored {
+            assert_eq!(reason, "S3 connection timeout");
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn sso_login_succeeded_serde_roundtrip() {
+        let event = AuditEvent::SsoLoginSucceeded {
+            user_id: "alice@example.com".into(),
+            provider: "okta".into(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::SsoLoginSucceeded { user_id, provider } = restored {
+            assert_eq!(user_id, "alice@example.com");
+            assert_eq!(provider, "okta");
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn sso_login_failed_serde_roundtrip() {
+        let event = AuditEvent::SsoLoginFailed {
+            reason: "invalid signature".into(),
+            provider: "azure-ad".into(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::SsoLoginFailed { reason, provider } = restored {
+            assert_eq!(reason, "invalid signature");
+            assert_eq!(provider, "azure-ad");
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn capability_audit_generated_serde_roundtrip() {
+        let event = AuditEvent::CapabilityAuditGenerated {
+            warnings_count: 7,
+            agents_scanned: 12,
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::CapabilityAuditGenerated {
+            warnings_count,
+            agents_scanned,
+        } = restored
+        {
+            assert_eq!(warnings_count, 7);
+            assert_eq!(agents_scanned, 12);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn security_alert_serde_roundtrip() {
+        let event = AuditEvent::SecurityAlert {
+            alert_type: "HighFrequency".into(),
+            agent_id: AgentId::new(),
+            details: "Agent made 500 tool calls in 60s".into(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"SecurityAlert\""));
+        let restored: AuditEvent = serde_json::from_str(&json).unwrap();
+        if let AuditEvent::SecurityAlert {
+            alert_type,
+            details,
+            ..
+        } = restored
+        {
+            assert_eq!(alert_type, "HighFrequency");
+            assert_eq!(details, "Agent made 500 tool calls in 60s");
         } else {
             panic!("wrong variant");
         }

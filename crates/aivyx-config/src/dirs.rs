@@ -19,6 +19,8 @@ use aivyx_core::{AivyxError, Result};
 /// ├── schedules/
 /// ├── skills/
 /// │   └── <name>/SKILL.md
+/// ├── roles/
+/// │   └── <role>.toml
 /// ├── team-sessions/
 /// └── keys/
 ///     └── master.json
@@ -58,6 +60,7 @@ impl AivyxDirs {
         create_dir_restricted(&self.schedules_dir())?;
         create_dir_restricted(&self.skills_dir())?;
         create_dir_restricted(&self.team_sessions_dir())?;
+        create_dir_restricted(&self.roles_dir())?;
         Ok(())
     }
 
@@ -123,6 +126,15 @@ impl AivyxDirs {
     /// Each skill lives in a subdirectory: `~/.aivyx/skills/<name>/SKILL.md`.
     pub fn skills_dir(&self) -> PathBuf {
         self.root.join("skills")
+    }
+
+    /// Returns the path to the roles directory (`~/.aivyx/roles/`).
+    ///
+    /// Role template TOML files placed here override the hardcoded role presets.
+    /// For example, `~/.aivyx/roles/researcher.toml` overrides the built-in
+    /// researcher profile when creating an agent with role "researcher".
+    pub fn roles_dir(&self) -> PathBuf {
+        self.root.join("roles")
     }
 
     /// Returns the path to the team sessions directory (`~/.aivyx/team-sessions/`).
@@ -192,6 +204,7 @@ mod tests {
             dirs.team_sessions_dir(),
             PathBuf::from("/tmp/test-aivyx/team-sessions")
         );
+        assert_eq!(dirs.roles_dir(), PathBuf::from("/tmp/test-aivyx/roles"));
     }
 
     #[test]
@@ -238,6 +251,10 @@ mod tests {
         assert!(dirs.team_sessions_dir().exists());
         let team_sessions_meta = fs::metadata(dirs.team_sessions_dir()).unwrap();
         assert_eq!(team_sessions_meta.permissions().mode() & 0o777, 0o700);
+
+        assert!(dirs.roles_dir().exists());
+        let roles_meta = fs::metadata(dirs.roles_dir()).unwrap();
+        assert_eq!(roles_meta.permissions().mode() & 0o777, 0o700);
 
         fs::remove_dir_all(&root).ok();
     }

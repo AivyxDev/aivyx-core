@@ -70,6 +70,7 @@ pub enum McpAuthMethod {
     /// OAuth 2.1 with PKCE — discovers metadata from the server's
     /// `/.well-known/oauth-authorization-server` endpoint and performs
     /// the authorization code flow with PKCE.
+    #[serde(rename = "oauth")]
     OAuth {
         /// OAuth client ID registered with the MCP server.
         client_id: String,

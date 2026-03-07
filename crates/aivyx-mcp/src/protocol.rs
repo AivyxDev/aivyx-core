@@ -166,10 +166,12 @@ pub struct IncomingJsonRpcRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum JsonRpcMessage {
+    /// An incoming request from the server (has required `method` field).
+    /// Listed first so serde tries it before `Response` — `Response` has all
+    /// optional fields and would match any JSON object.
+    Request(IncomingJsonRpcRequest),
     /// A response to one of our requests (has `result` or `error`).
     Response(JsonRpcResponse),
-    /// An incoming request from the server (has `method`).
-    Request(IncomingJsonRpcRequest),
 }
 
 /// MCP `sampling/createMessage` request parameters.
@@ -218,6 +220,48 @@ pub struct SamplingResponse {
     pub content: SamplingContent,
     /// Model that generated the response.
     pub model: String,
+}
+
+// ---------------------------------------------------------------------------
+// MCP Elicitation protocol types (server → client)
+// ---------------------------------------------------------------------------
+
+/// MCP `elicitation/create` request parameters.
+///
+/// Sent by the MCP server when it needs structured user input (e.g., a form
+/// with fields for confirmation, text input, or selection). The client should
+/// present the request to the user and return their response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationRequest {
+    /// Human-readable message explaining what input is needed.
+    pub message: String,
+    /// JSON Schema describing the requested input fields.
+    #[serde(default)]
+    pub requested_schema: Option<Value>,
+}
+
+/// MCP `elicitation/create` response — returned by the client to the server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationResponse {
+    /// The action taken by the user.
+    pub action: ElicitationAction,
+    /// User-provided data matching the requested schema (present when `action` is `Accept`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<Value>,
+}
+
+/// The action taken by the user in response to an elicitation request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ElicitationAction {
+    /// User accepted and provided the requested data.
+    Accept,
+    /// User declined to provide data.
+    Decline,
+    /// The request was dismissed (e.g., in headless/background mode).
+    Dismiss,
 }
 
 #[cfg(test)]
@@ -344,5 +388,56 @@ mod tests {
         assert_eq!(json["content"]["type"], "text");
         assert_eq!(json["content"]["text"], "4");
         assert_eq!(json["model"], "claude-sonnet-4-20250514");
+    }
+
+    #[test]
+    fn elicitation_request_deserialization() {
+        let json = r#"{
+            "message": "Please confirm the file deletion",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "confirmed": {"type": "boolean"}
+                }
+            }
+        }"#;
+        let req: ElicitationRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.message, "Please confirm the file deletion");
+        assert!(req.requested_schema.is_some());
+    }
+
+    #[test]
+    fn elicitation_response_accept() {
+        let resp = ElicitationResponse {
+            action: ElicitationAction::Accept,
+            content: Some(serde_json::json!({"confirmed": true})),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["action"], "accept");
+        assert_eq!(json["content"]["confirmed"], true);
+    }
+
+    #[test]
+    fn elicitation_response_decline() {
+        let resp = ElicitationResponse {
+            action: ElicitationAction::Decline,
+            content: None,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["action"], "decline");
+        assert!(json.get("content").is_none());
+    }
+
+    #[test]
+    fn elicitation_action_roundtrip() {
+        for action in [
+            ElicitationAction::Accept,
+            ElicitationAction::Decline,
+            ElicitationAction::Dismiss,
+        ] {
+            let json = serde_json::to_string(&action).unwrap();
+            let restored: ElicitationAction = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored, action);
+        }
     }
 }

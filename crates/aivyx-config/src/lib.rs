@@ -21,7 +21,10 @@ pub mod speech;
 
 pub use autonomy_policy::AutonomyPolicy;
 pub use channel::{ChannelConfig, ChannelPlatform};
-pub use config::AivyxConfig;
+pub use config::{
+    AivyxConfig, BackupConfig, BillingConfig, DefaultQuotas, GroupRoleMappingConfig,
+    OidcProviderConfig, SsoConfig, TenantsConfig, TriggerConfig,
+};
 pub use dirs::AivyxDirs;
 pub use embedding::EmbeddingConfig;
 pub use mcp::{McpAuthConfig, McpAuthMethod, McpServerConfig, McpTransport};
@@ -33,4 +36,4 @@ pub use schedule::{ScheduleEntry, validate_cron};
 pub use server::ServerConfig;
 pub use skill::{LoadedSkill, SkillManifest, SkillSummary, discover_skills, load_skill};
 pub use smtp::SmtpConfig;
-pub use speech::{SpeechConfig, SpeechProvider};
+pub use speech::{SpeechConfig, SpeechProvider, TtsConfig, TtsProvider};

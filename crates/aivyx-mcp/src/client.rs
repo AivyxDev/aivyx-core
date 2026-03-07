@@ -11,8 +11,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::protocol::{
-    CallToolResult, InitializeResult, JsonRpcRequest, MCP_PROTOCOL_VERSION, McpToolDef,
-    SamplingRequest, SamplingResponse,
+    CallToolResult, ElicitationRequest, ElicitationResponse, InitializeResult, JsonRpcRequest,
+    MCP_PROTOCOL_VERSION, McpToolDef, SamplingRequest, SamplingResponse,
 };
 use crate::transport::{McpTransportLayer, SseTransport, StdioTransport};
 
@@ -29,6 +29,32 @@ pub trait SamplingHandler: Send + Sync {
     /// The implementation should call the LLM provider and return the
     /// assistant's response.
     async fn create_message(&self, request: SamplingRequest) -> Result<SamplingResponse>;
+}
+
+/// Handler for MCP server-initiated elicitation requests.
+///
+/// When an MCP server sends an `elicitation/create` request, the client
+/// dispatches it to this handler to collect structured user input. In headless
+/// or background modes, the default implementation should auto-dismiss.
+#[async_trait]
+pub trait ElicitationHandler: Send + Sync {
+    /// Handle an elicitation request by presenting it to the user (or auto-dismissing).
+    async fn elicit(&self, request: ElicitationRequest) -> Result<ElicitationResponse>;
+}
+
+/// Default elicitation handler that auto-dismisses all requests.
+///
+/// Used in headless/background modes where no interactive user is available.
+pub struct AutoDismissElicitationHandler;
+
+#[async_trait]
+impl ElicitationHandler for AutoDismissElicitationHandler {
+    async fn elicit(&self, _request: ElicitationRequest) -> Result<ElicitationResponse> {
+        Ok(ElicitationResponse {
+            action: crate::protocol::ElicitationAction::Dismiss,
+            content: None,
+        })
+    }
 }
 
 /// MCP client that manages communication with a single MCP server.

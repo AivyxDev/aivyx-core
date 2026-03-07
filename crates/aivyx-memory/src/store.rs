@@ -6,15 +6,17 @@
 //! - `"emb:{MemoryId}"` — serialized embedding vector (`Vec<f32>`)
 //! - `"ecache:{sha256_hex}"` — embedding cache (content hash -> `Vec<f32>`)
 //! - `"triple:{TripleId}"` — serialized [`KnowledgeTriple`]
+//! - `"outcome:{OutcomeId}"` — serialized [`OutcomeRecord`]
 //! - `"profile:current"` — serialized [`UserProfile`]
 //! - `"profile:v{revision}"` — versioned snapshot before overwrite
 //! - `"profile:extract_counter"` — facts accumulated since last extraction
 
 use std::path::Path;
 
-use aivyx_core::{AivyxError, MemoryId, Result, TripleId};
+use aivyx_core::{AivyxError, MemoryId, OutcomeId, Result, TripleId};
 use aivyx_crypto::{EncryptedStore, MasterKey};
 
+use crate::outcome::{OutcomeFilter, OutcomeRecord};
 use crate::profile::UserProfile;
 use crate::types::{KnowledgeTriple, MemoryEntry};
 
@@ -148,6 +150,37 @@ impl MemoryStore {
     }
 
     // -----------------------------------------------------------------------
+    // Binary attachments (images, audio, etc.)
+    // -----------------------------------------------------------------------
+
+    /// Save binary attachment data (e.g., an image associated with a memory).
+    pub fn save_attachment(
+        &self,
+        id: &str,
+        data: &[u8],
+        master_key: &MasterKey,
+    ) -> Result<()> {
+        let key = format!("attach:{id}");
+        self.store.put(&key, data, master_key)
+    }
+
+    /// Load binary attachment data by ID.
+    pub fn load_attachment(
+        &self,
+        id: &str,
+        master_key: &MasterKey,
+    ) -> Result<Option<Vec<u8>>> {
+        let key = format!("attach:{id}");
+        self.store.get(&key, master_key)
+    }
+
+    /// Delete a binary attachment.
+    pub fn delete_attachment(&self, id: &str) -> Result<()> {
+        let key = format!("attach:{id}");
+        self.store.delete(&key)
+    }
+
+    // -----------------------------------------------------------------------
     // Knowledge triples
     // -----------------------------------------------------------------------
 
@@ -192,6 +225,110 @@ impl MemoryStore {
             }
         }
         Ok(ids)
+    }
+
+    // -----------------------------------------------------------------------
+    // Outcome records
+    // -----------------------------------------------------------------------
+
+    /// Save an outcome record.
+    pub fn save_outcome(&self, record: &OutcomeRecord, master_key: &MasterKey) -> Result<()> {
+        let key = format!("outcome:{}", record.id);
+        let data = serde_json::to_vec(record).map_err(AivyxError::Serialization)?;
+        self.store.put(&key, &data, master_key)
+    }
+
+    /// Load an outcome record by ID.
+    pub fn load_outcome(
+        &self,
+        id: &OutcomeId,
+        master_key: &MasterKey,
+    ) -> Result<Option<OutcomeRecord>> {
+        let key = format!("outcome:{id}");
+        match self.store.get(&key, master_key)? {
+            Some(data) => {
+                let record: OutcomeRecord = serde_json::from_slice(&data)?;
+                Ok(Some(record))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Delete an outcome record by ID.
+    pub fn delete_outcome(&self, id: &OutcomeId) -> Result<()> {
+        let key = format!("outcome:{id}");
+        self.store.delete(&key)
+    }
+
+    /// List all outcome IDs in the store.
+    pub fn list_outcomes(&self) -> Result<Vec<OutcomeId>> {
+        let keys = self.store.list_keys()?;
+        let mut ids = Vec::new();
+        for key in keys {
+            if let Some(id_str) = key.strip_prefix("outcome:")
+                && let Ok(id) = id_str.parse::<OutcomeId>()
+            {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
+    }
+
+    /// Query outcomes with optional filters.
+    ///
+    /// Loads all outcomes and applies the filter criteria: source type name,
+    /// success/failure, agent name, and result limit.
+    pub fn query_outcomes(
+        &self,
+        filter: &OutcomeFilter,
+        master_key: &MasterKey,
+    ) -> Result<Vec<OutcomeRecord>> {
+        let ids = self.list_outcomes()?;
+        let mut results = Vec::new();
+
+        for id in ids {
+            if let Some(record) = self.load_outcome(&id, master_key)? {
+                // Source type filter
+                if let Some(ref source_type) = filter.source_type {
+                    let actual = match &record.source {
+                        crate::outcome::OutcomeSource::MissionStep { .. } => "MissionStep",
+                        crate::outcome::OutcomeSource::ToolCall { .. } => "ToolCall",
+                        crate::outcome::OutcomeSource::Delegation { .. } => "Delegation",
+                        crate::outcome::OutcomeSource::SpecialistSuggestion { .. } => {
+                            "SpecialistSuggestion"
+                        }
+                    };
+                    if actual != source_type {
+                        continue;
+                    }
+                }
+
+                // Success filter
+                if let Some(success) = filter.success {
+                    if record.success != success {
+                        continue;
+                    }
+                }
+
+                // Agent name filter
+                if let Some(ref agent_name) = filter.agent_name {
+                    if record.agent_name != *agent_name {
+                        continue;
+                    }
+                }
+
+                results.push(record);
+
+                // Limit
+                if let Some(limit) = filter.limit {
+                    if results.len() >= limit {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(results)
     }
 
     // -----------------------------------------------------------------------
@@ -249,7 +386,9 @@ impl MemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outcome::{OutcomeRecord, OutcomeSource};
     use crate::types::{KnowledgeTriple, MemoryEntry, MemoryKind};
+    use aivyx_core::TaskId;
     use aivyx_crypto::MasterKey;
 
     fn setup() -> (MemoryStore, MasterKey, std::path::PathBuf) {
@@ -514,6 +653,228 @@ mod tests {
         let (store, key, dir) = setup();
         let count = store.load_extraction_counter(&key).unwrap();
         assert_eq!(count, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn save_load_outcome() {
+        let (store, key, dir) = setup();
+        let record = OutcomeRecord::new(
+            OutcomeSource::ToolCall {
+                tool_name: "shell".into(),
+            },
+            true,
+            "Command succeeded".into(),
+            250,
+            "test-agent".into(),
+            "run build".into(),
+        );
+        let id = record.id;
+
+        store.save_outcome(&record, &key).unwrap();
+        let loaded = store.load_outcome(&id, &key).unwrap().unwrap();
+        assert_eq!(loaded.id, id);
+        assert!(loaded.success);
+        assert_eq!(loaded.agent_name, "test-agent");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn delete_outcome() {
+        let (store, key, dir) = setup();
+        let record = OutcomeRecord::new(
+            OutcomeSource::ToolCall {
+                tool_name: "shell".into(),
+            },
+            true,
+            "ok".into(),
+            100,
+            "agent".into(),
+            "goal".into(),
+        );
+        let id = record.id;
+
+        store.save_outcome(&record, &key).unwrap();
+        assert!(store.load_outcome(&id, &key).unwrap().is_some());
+
+        store.delete_outcome(&id).unwrap();
+        assert!(store.load_outcome(&id, &key).unwrap().is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn list_outcomes() {
+        let (store, key, dir) = setup();
+        let r1 = OutcomeRecord::new(
+            OutcomeSource::ToolCall {
+                tool_name: "shell".into(),
+            },
+            true,
+            "ok".into(),
+            100,
+            "agent".into(),
+            "goal".into(),
+        );
+        let r2 = OutcomeRecord::new(
+            OutcomeSource::Delegation {
+                specialist: "coder".into(),
+                task: "write code".into(),
+            },
+            false,
+            "failed".into(),
+            500,
+            "lead".into(),
+            "deploy".into(),
+        );
+
+        store.save_outcome(&r1, &key).unwrap();
+        store.save_outcome(&r2, &key).unwrap();
+
+        let ids = store.list_outcomes().unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&r1.id));
+        assert!(ids.contains(&r2.id));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn query_outcomes_by_source_type() {
+        let (store, key, dir) = setup();
+
+        let tool_outcome = OutcomeRecord::new(
+            OutcomeSource::ToolCall {
+                tool_name: "shell".into(),
+            },
+            true,
+            "ok".into(),
+            100,
+            "agent".into(),
+            "goal".into(),
+        );
+        let delegation_outcome = OutcomeRecord::new(
+            OutcomeSource::Delegation {
+                specialist: "coder".into(),
+                task: "code".into(),
+            },
+            true,
+            "ok".into(),
+            200,
+            "agent".into(),
+            "goal".into(),
+        );
+
+        store.save_outcome(&tool_outcome, &key).unwrap();
+        store.save_outcome(&delegation_outcome, &key).unwrap();
+
+        let filter = OutcomeFilter {
+            source_type: Some("ToolCall".into()),
+            ..Default::default()
+        };
+        let results = store.query_outcomes(&filter, &key).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, tool_outcome.id);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn query_outcomes_by_success_and_agent() {
+        let (store, key, dir) = setup();
+
+        let r1 = OutcomeRecord::new(
+            OutcomeSource::MissionStep {
+                task_id: TaskId::new(),
+                step_index: 0,
+            },
+            true,
+            "ok".into(),
+            100,
+            "alpha".into(),
+            "goal".into(),
+        );
+        let r2 = OutcomeRecord::new(
+            OutcomeSource::MissionStep {
+                task_id: TaskId::new(),
+                step_index: 1,
+            },
+            false,
+            "failed".into(),
+            200,
+            "alpha".into(),
+            "goal".into(),
+        );
+        let r3 = OutcomeRecord::new(
+            OutcomeSource::ToolCall {
+                tool_name: "shell".into(),
+            },
+            true,
+            "ok".into(),
+            50,
+            "beta".into(),
+            "goal".into(),
+        );
+
+        store.save_outcome(&r1, &key).unwrap();
+        store.save_outcome(&r2, &key).unwrap();
+        store.save_outcome(&r3, &key).unwrap();
+
+        // Filter: successful only
+        let filter = OutcomeFilter {
+            success: Some(true),
+            ..Default::default()
+        };
+        let results = store.query_outcomes(&filter, &key).unwrap();
+        assert_eq!(results.len(), 2);
+
+        // Filter: agent "alpha" + failed
+        let filter = OutcomeFilter {
+            success: Some(false),
+            agent_name: Some("alpha".into()),
+            ..Default::default()
+        };
+        let results = store.query_outcomes(&filter, &key).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, r2.id);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn query_outcomes_with_limit() {
+        let (store, key, dir) = setup();
+
+        for i in 0..5 {
+            let record = OutcomeRecord::new(
+                OutcomeSource::ToolCall {
+                    tool_name: format!("tool_{i}"),
+                },
+                true,
+                "ok".into(),
+                100,
+                "agent".into(),
+                "goal".into(),
+            );
+            store.save_outcome(&record, &key).unwrap();
+        }
+
+        let filter = OutcomeFilter {
+            limit: Some(3),
+            ..Default::default()
+        };
+        let results = store.query_outcomes(&filter, &key).unwrap();
+        assert_eq!(results.len(), 3);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_nonexistent_outcome_returns_none() {
+        let (store, key, dir) = setup();
+        let result = store.load_outcome(&OutcomeId::new(), &key).unwrap();
+        assert!(result.is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

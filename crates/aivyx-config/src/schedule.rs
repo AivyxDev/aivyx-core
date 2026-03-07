@@ -31,6 +31,12 @@ pub struct ScheduleEntry {
     /// Whether this schedule is currently active.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Optional team to run instead of a single agent.
+    ///
+    /// When set, the scheduler spawns a team session (via `TeamRuntime`)
+    /// rather than a single agent turn.
+    #[serde(default)]
+    pub team: Option<String>,
     /// When this entry was created.
     pub created_at: DateTime<Utc>,
     /// When this entry last fired (`None` if never run).
@@ -57,6 +63,7 @@ impl ScheduleEntry {
             prompt: prompt.into(),
             notify: true,
             enabled: true,
+            team: None,
             created_at: Utc::now(),
             last_run_at: None,
         }
@@ -133,5 +140,36 @@ mod tests {
     fn validate_cron_rejects_invalid() {
         assert!(validate_cron("not-a-cron").is_err());
         assert!(validate_cron("").is_err());
+    }
+
+    #[test]
+    fn schedule_entry_team_field_default() {
+        let entry = ScheduleEntry::new("test", "* * * * *", "agent", "hello");
+        assert!(entry.team.is_none());
+    }
+
+    #[test]
+    fn schedule_entry_team_serde_roundtrip() {
+        let mut entry = ScheduleEntry::new("team-test", "0 * * * *", "agent", "run team");
+        entry.team = Some("research-team".into());
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: ScheduleEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.team, Some("research-team".into()));
+    }
+
+    #[test]
+    fn schedule_entry_without_team_deserializes() {
+        // Backward compat: no team field in JSON → None
+        let json = r#"{
+            "name": "legacy",
+            "cron": "0 7 * * *",
+            "agent": "a",
+            "prompt": "p",
+            "notify": true,
+            "enabled": true,
+            "created_at": "2025-01-01T00:00:00Z"
+        }"#;
+        let entry: ScheduleEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.team.is_none());
     }
 }

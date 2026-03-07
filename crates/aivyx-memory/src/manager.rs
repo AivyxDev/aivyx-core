@@ -5,10 +5,12 @@ use std::sync::Arc;
 
 use tracing::debug;
 
-use aivyx_core::{AgentId, MemoryId, Result, TripleId};
+use aivyx_core::{AgentId, MemoryId, OutcomeId, Result, TripleId};
 use aivyx_crypto::MasterKey;
 use aivyx_llm::EmbeddingProvider;
 
+use crate::graph::KnowledgeGraph;
+use crate::outcome::{OutcomeFilter, OutcomeRecord};
 use crate::search::{SearchResult, VectorIndex, content_hash};
 use crate::store::MemoryStore;
 use crate::types::{KnowledgeTriple, MemoryEntry, MemoryKind};
@@ -27,12 +29,14 @@ pub struct MemoryStats {
 /// Orchestrates embedding, caching, storage, search, and formatting for agent
 /// memories and knowledge triples.
 pub struct MemoryManager {
-    store: MemoryStore,
-    index: VectorIndex,
+    pub(crate) store: MemoryStore,
+    pub(crate) index: VectorIndex,
     embedding_provider: Arc<dyn EmbeddingProvider>,
-    master_key: MasterKey,
+    pub(crate) master_key: MasterKey,
     /// Maximum number of memories to keep. `0` means unlimited.
     max_memories: usize,
+    /// In-memory knowledge graph for traversal and path finding.
+    graph: Option<KnowledgeGraph>,
 }
 
 impl MemoryManager {
@@ -47,6 +51,7 @@ impl MemoryManager {
         max_memories: usize,
     ) -> Result<Self> {
         let index = VectorIndex::build(&store, &master_key)?;
+        let graph = KnowledgeGraph::build(&store, &master_key).ok();
         debug!(
             "MemoryManager initialized with {} indexed vectors (limit: {})",
             index.len(),
@@ -62,6 +67,7 @@ impl MemoryManager {
             embedding_provider,
             master_key,
             max_memories,
+            graph,
         })
     }
 
@@ -170,9 +176,14 @@ impl MemoryManager {
         Ok(entries)
     }
 
+    /// Access the in-memory knowledge graph, if available.
+    pub fn graph(&self) -> Option<&KnowledgeGraph> {
+        self.graph.as_ref()
+    }
+
     /// Add a knowledge triple.
     pub fn add_triple(
-        &self,
+        &mut self,
         subject: String,
         predicate: String,
         object: String,
@@ -184,6 +195,9 @@ impl MemoryManager {
             KnowledgeTriple::new(subject, predicate, object, agent_scope, confidence, source);
         let id = triple.id;
         self.store.save_triple(&triple, &self.master_key)?;
+        if let Some(ref mut graph) = self.graph {
+            graph.upsert_triple(&triple);
+        }
         debug!("Stored triple {id}");
         Ok(id)
     }
@@ -230,6 +244,36 @@ impl MemoryManager {
         }
 
         Ok(results)
+    }
+
+    // -----------------------------------------------------------------------
+    // Outcome tracking
+    // -----------------------------------------------------------------------
+
+    /// Record an outcome from an agent operation.
+    pub fn record_outcome(&self, record: &OutcomeRecord) -> Result<OutcomeId> {
+        self.store.save_outcome(record, &self.master_key)?;
+        debug!("Recorded outcome {} (success={})", record.id, record.success);
+        Ok(record.id)
+    }
+
+    /// Query outcomes matching the given filter criteria.
+    pub fn query_outcomes(&self, filter: &OutcomeFilter) -> Result<Vec<OutcomeRecord>> {
+        self.store.query_outcomes(filter, &self.master_key)
+    }
+
+    // -----------------------------------------------------------------------
+    // Memory consolidation
+    // -----------------------------------------------------------------------
+
+    /// Consolidate memories by merging similar entries, pruning stale ones,
+    /// and strengthening frequently accessed ones.
+    pub async fn consolidate(
+        &mut self,
+        provider: &dyn aivyx_llm::LlmProvider,
+        config: &crate::consolidation::ConsolidationConfig,
+    ) -> Result<crate::consolidation::ConsolidationReport> {
+        crate::consolidation::consolidate(self, provider, config).await
     }
 
     /// Delete a memory and its associated embedding.
@@ -424,7 +468,7 @@ impl MemoryManager {
 
         let request = build_profile_extraction_request(&current, &facts_and_prefs);
         let response = provider.chat(&request).await?;
-        let extracted = parse_profile_extraction(&response.message.content, &current)?;
+        let extracted = parse_profile_extraction(response.message.content.text(), &current)?;
 
         // Save the extracted profile (update_profile increments revision)
         self.update_profile(extracted)?;
@@ -467,6 +511,8 @@ fn format_kind(kind: &MemoryKind) -> &str {
         MemoryKind::Preference => "preference",
         MemoryKind::SessionSummary => "session",
         MemoryKind::Procedure => "procedure",
+        MemoryKind::Decision => "decision",
+        MemoryKind::Outcome => "outcome",
         MemoryKind::Custom(s) => s,
     }
 }
@@ -665,7 +711,7 @@ mod tests {
     #[test]
     fn add_and_query_triples() {
         let (store, provider, key, dir) = setup(4);
-        let mgr = MemoryManager::new(store, provider, key, 0).unwrap();
+        let mut mgr = MemoryManager::new(store, provider, key, 0).unwrap();
 
         mgr.add_triple(
             "Rust".into(),
@@ -1030,6 +1076,67 @@ mod tests {
     }
 
     #[test]
+    fn record_and_query_outcomes() {
+        let (store, provider, key, dir) = setup(4);
+        let mgr = MemoryManager::new(store, provider, key, 0).unwrap();
+
+        let r1 = crate::outcome::OutcomeRecord::new(
+            crate::outcome::OutcomeSource::ToolCall {
+                tool_name: "shell".into(),
+            },
+            true,
+            "Command ran successfully".into(),
+            250,
+            "agent-1".into(),
+            "run tests".into(),
+        );
+        let r2 = crate::outcome::OutcomeRecord::new(
+            crate::outcome::OutcomeSource::Delegation {
+                specialist: "coder".into(),
+                task: "write feature".into(),
+            },
+            false,
+            "Timeout".into(),
+            30000,
+            "lead".into(),
+            "build feature".into(),
+        );
+
+        let id1 = mgr.record_outcome(&r1).unwrap();
+        let id2 = mgr.record_outcome(&r2).unwrap();
+        assert_eq!(id1, r1.id);
+        assert_eq!(id2, r2.id);
+
+        // Query all
+        let all = mgr
+            .query_outcomes(&OutcomeFilter::default())
+            .unwrap();
+        assert_eq!(all.len(), 2);
+
+        // Query successes only
+        let successes = mgr
+            .query_outcomes(&OutcomeFilter {
+                success: Some(true),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(successes.len(), 1);
+        assert_eq!(successes[0].id, r1.id);
+
+        // Query by agent
+        let lead_outcomes = mgr
+            .query_outcomes(&OutcomeFilter {
+                agent_name: Some("lead".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(lead_outcomes.len(), 1);
+        assert!(!lead_outcomes[0].success);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn extraction_counter_lifecycle() {
         let (store, provider, key, dir) = setup(4);
         let mgr = MemoryManager::new(store, provider, key, 0).unwrap();
@@ -1048,5 +1155,16 @@ mod tests {
         assert_eq!(c3, 1);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn format_kind_returns_correct_strings() {
+        assert_eq!(format_kind(&MemoryKind::Fact), "fact");
+        assert_eq!(format_kind(&MemoryKind::Preference), "preference");
+        assert_eq!(format_kind(&MemoryKind::SessionSummary), "session");
+        assert_eq!(format_kind(&MemoryKind::Procedure), "procedure");
+        assert_eq!(format_kind(&MemoryKind::Decision), "decision");
+        assert_eq!(format_kind(&MemoryKind::Outcome), "outcome");
+        assert_eq!(format_kind(&MemoryKind::Custom("custom-kind".into())), "custom-kind");
     }
 }

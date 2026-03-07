@@ -55,7 +55,10 @@ pub mod transport;
 
 pub use auth::{McpOAuthClient, OAuthMetadata, OAuthTokens, PkceChallenge};
 pub use cache::ToolResultCache;
-pub use client::{McpClient, SamplingHandler};
-pub use protocol::{McpToolDef, SamplingContent, SamplingMessage, SamplingRequest, SamplingResponse};
+pub use client::{AutoDismissElicitationHandler, ElicitationHandler, McpClient, SamplingHandler};
+pub use protocol::{
+    ElicitationAction, ElicitationRequest, ElicitationResponse, McpToolDef, SamplingContent,
+    SamplingMessage, SamplingRequest, SamplingResponse,
+};
 pub use proxy::McpProxyTool;
 pub use transport::McpTransportLayer;

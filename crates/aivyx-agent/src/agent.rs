@@ -2,15 +2,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use aivyx_audit::{AuditEvent, AuditLog};
+use aivyx_audit::{AuditEvent, AuditLog, abuse::AbuseDetector};
 use aivyx_capability::CapabilitySet;
 use aivyx_core::{
     AgentId, AivyxError, AutonomyTier, CapabilityScope, ChannelAdapter, Principal, Result,
     SessionId, ToolRegistry,
 };
 use aivyx_llm::{
-    ChatMessage, ChatRequest, ChatResponse, LlmProvider, StopReason, StreamEvent, ToolCall,
-    ToolResult,
+    ChatMessage, ChatRequest, ChatResponse, Content, LlmProvider, StopReason, StreamEvent,
+    ToolCall, ToolResult,
 };
 use tokio::sync::mpsc;
 
@@ -56,6 +56,11 @@ pub struct Agent {
     /// When set, `resolve_system_prompt()` injects a `[TEAM CONTEXT]` block
     /// so specialists know about the team, the original goal, and completed work.
     team_context: Option<Arc<tokio::sync::Mutex<String>>>,
+    /// Sliding-window tool abuse detector.
+    /// When set, records every tool call and emits `SecurityAlert` audit events
+    /// when anomalous patterns are detected (high frequency, repeated denials,
+    /// scope escalation).
+    abuse_detector: Option<Arc<AbuseDetector>>,
 }
 
 impl Agent {
@@ -99,7 +104,13 @@ impl Agent {
             pending_notifications: Vec::new(),
             skill_loader: None,
             team_context: None,
+            abuse_detector: None,
         }
+    }
+
+    /// Set the tool abuse detector for anomaly monitoring.
+    pub fn set_abuse_detector(&mut self, detector: Arc<AbuseDetector>) {
+        self.abuse_detector = Some(detector);
     }
 
     /// Set the memory manager for memory-augmented conversations.
@@ -266,6 +277,8 @@ impl Agent {
                 if let Some(ref n) = notification_block {
                     augmented = format!("{augmented}\n\n{n}");
                 }
+                augmented.push_str("\n\n");
+                augmented.push_str(crate::sanitize::TOOL_OUTPUT_INSTRUCTION);
                 return augmented;
             }
         }
@@ -288,10 +301,17 @@ impl Agent {
             if let Some(ref s) = skills_block {
                 augmented = format!("{augmented}\n\n{s}");
             }
+            augmented.push_str("\n\n");
+            augmented.push_str(crate::sanitize::TOOL_OUTPUT_INSTRUCTION);
             return augmented;
         }
 
-        self.system_prompt.clone()
+        // Base case: system prompt + tool output safety instruction
+        format!(
+            "{}\n\n{}",
+            self.system_prompt,
+            crate::sanitize::TOOL_OUTPUT_INSTRUCTION
+        )
     }
 
     /// Execute a single turn: add user message, run the LLM loop, return the
@@ -301,7 +321,19 @@ impl Agent {
         user_message: &str,
         channel: Option<&dyn ChannelAdapter>,
     ) -> Result<String> {
-        self.conversation.push(ChatMessage::user(user_message));
+        self.turn_with_content(Content::Text(user_message.to_string()), channel)
+            .await
+    }
+
+    /// Execute a single turn with multimodal content (text + images).
+    pub async fn turn_with_content(
+        &mut self,
+        content: Content,
+        channel: Option<&dyn ChannelAdapter>,
+    ) -> Result<String> {
+        let user_message = content.to_text();
+        self.conversation
+            .push(ChatMessage::user_multimodal(content));
         self.maybe_compress_conversation().await;
 
         self.audit_event(AuditEvent::AgentTurnStarted {
@@ -316,7 +348,7 @@ impl Agent {
         for loop_idx in 0..MAX_TOOL_LOOPS {
             // Only resolve memory context on the first iteration.
             let system_prompt = if loop_idx == 0 {
-                let prompt = self.resolve_system_prompt(user_message).await;
+                let prompt = self.resolve_system_prompt(&user_message).await;
                 augmented_prompt = Some(prompt.clone());
                 prompt
             } else {
@@ -356,7 +388,7 @@ impl Agent {
 
             match response.stop_reason {
                 StopReason::EndTurn => {
-                    let content = response.message.content.clone();
+                    let content = response.message.content.to_text();
                     self.conversation.push(response.message);
                     self.audit_turn_completed(tool_calls_made, total_tokens);
                     #[cfg(feature = "memory")]
@@ -367,7 +399,7 @@ impl Agent {
                     return Ok(content);
                 }
                 StopReason::MaxTokens => {
-                    let content = response.message.content.clone();
+                    let content = response.message.content.to_text();
                     self.conversation.push(response.message);
                     self.audit_turn_completed(tool_calls_made, total_tokens);
                     warn!("Agent {} hit max_tokens limit", self.name);
@@ -385,9 +417,10 @@ impl Agent {
                     // Add assistant message with tool calls to conversation
                     self.conversation.push(response.message);
 
-                    // Add each tool result as a separate message
+                    // Add each tool result with sanitized boundary markers
                     for result in tool_results {
-                        self.conversation.push(ChatMessage::tool(result));
+                        self.conversation
+                            .push(ChatMessage::tool(Self::wrap_tool_result(result)));
                     }
                 }
             }
@@ -410,7 +443,26 @@ impl Agent {
         token_tx: mpsc::Sender<String>,
         cancel: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<String> {
-        self.conversation.push(ChatMessage::user(user_message));
+        self.turn_stream_with_content(
+            Content::Text(user_message.to_string()),
+            channel,
+            token_tx,
+            cancel,
+        )
+        .await
+    }
+
+    /// Execute a single turn with streaming and multimodal content.
+    pub async fn turn_stream_with_content(
+        &mut self,
+        content: Content,
+        channel: Option<&dyn ChannelAdapter>,
+        token_tx: mpsc::Sender<String>,
+        cancel: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<String> {
+        let user_message = content.to_text();
+        self.conversation
+            .push(ChatMessage::user_multimodal(content));
         self.maybe_compress_conversation().await;
 
         self.audit_event(AuditEvent::AgentTurnStarted {
@@ -432,7 +484,7 @@ impl Agent {
             }
 
             let system_prompt = if loop_idx == 0 {
-                let prompt = self.resolve_system_prompt(user_message).await;
+                let prompt = self.resolve_system_prompt(&user_message).await;
                 augmented_prompt = Some(prompt.clone());
                 prompt
             } else {
@@ -510,7 +562,7 @@ impl Agent {
 
             match stop_reason {
                 StopReason::EndTurn => {
-                    let content = message.content.clone();
+                    let content = message.content.to_text();
                     self.conversation.push(message);
                     self.audit_turn_completed(tool_calls_made, total_tokens);
                     #[cfg(feature = "memory")]
@@ -521,7 +573,7 @@ impl Agent {
                     return Ok(content);
                 }
                 StopReason::MaxTokens => {
-                    let content = message.content.clone();
+                    let content = message.content.to_text();
                     self.conversation.push(message);
                     self.audit_turn_completed(tool_calls_made, total_tokens);
                     warn!("Agent {} hit max_tokens limit", self.name);
@@ -543,7 +595,8 @@ impl Agent {
 
                     self.conversation.push(message);
                     for result in tool_results {
-                        self.conversation.push(ChatMessage::tool(result));
+                        self.conversation
+                            .push(ChatMessage::tool(Self::wrap_tool_result(result)));
                     }
                     // Continue loop — next iteration will stream again
                 }
@@ -759,7 +812,7 @@ impl Agent {
 
         // Execute
         info!("Agent {} executing tool '{}'", self.name, tc.name);
-        match tool.execute(tc.arguments.clone()).await {
+        let (result, denied) = match tool.execute(tc.arguments.clone()).await {
             Ok(output) => {
                 self.audit_event(AuditEvent::ToolExecuted {
                     tool_id,
@@ -770,11 +823,11 @@ impl Agent {
                         200,
                     ),
                 });
-                ToolResult {
+                (ToolResult {
                     tool_call_id: tc.id.clone(),
                     content: output,
                     is_error: false,
-                }
+                }, false)
             }
             Err(e) => {
                 self.audit_event(AuditEvent::ToolDenied {
@@ -783,13 +836,52 @@ impl Agent {
                     action: tc.name.clone(),
                     reason: e.to_string(),
                 });
-                ToolResult {
+                (ToolResult {
                     tool_call_id: tc.id.clone(),
                     content: serde_json::json!({"error": e.to_string()}),
                     is_error: true,
-                }
+                }, true)
+            }
+        };
+
+        // Record for abuse detection
+        if let Some(ref detector) = self.abuse_detector {
+            let agent_str = self.id.to_string();
+            let alerts = detector.record_tool_call(&agent_str, &tc.name, denied);
+            for alert in alerts {
+                let details = serde_json::to_string(&alert).unwrap_or_default();
+                let alert_type = match &alert {
+                    aivyx_audit::abuse::AbuseAlert::HighFrequency { .. } => "HighFrequency",
+                    aivyx_audit::abuse::AbuseAlert::RepeatedDenials { .. } => "RepeatedDenials",
+                    aivyx_audit::abuse::AbuseAlert::ScopeEscalation { .. } => "ScopeEscalation",
+                };
+                warn!("Security alert for agent {}: {alert_type}", self.name);
+                self.audit_event(AuditEvent::SecurityAlert {
+                    alert_type: alert_type.to_string(),
+                    agent_id: self.id,
+                    details,
+                });
             }
         }
+
+        result
+    }
+
+    /// Wrap a tool result's content in `[TOOL_OUTPUT]` boundary markers for
+    /// privileged context separation. This prevents prompt injection via tool
+    /// outputs by clearly delineating untrusted data.
+    fn wrap_tool_result(mut result: ToolResult) -> ToolResult {
+        // Extract a text representation of the tool output
+        let text = match &result.content {
+            serde_json::Value::String(s) => s.clone(),
+            other => serde_json::to_string(other).unwrap_or_default(),
+        };
+        // Re-wrap content with boundary markers. We preserve the tool_call_id
+        // (which maps to the original tool call) so the LLM can correlate.
+        let tool_name = result.tool_call_id.clone();
+        let wrapped = crate::sanitize::wrap_tool_output(&tool_name, &text);
+        result.content = serde_json::Value::String(wrapped);
+        result
     }
 
     /// Validate tool input against the matched capability's constraints.
@@ -990,7 +1082,7 @@ impl Agent {
         };
 
         let summary = match self.provider.chat(&request).await {
-            Ok(response) => response.message.content.trim().to_string(),
+            Ok(response) => response.message.content.text().trim().to_string(),
             Err(e) => {
                 debug!("Session summary generation failed (non-fatal): {e}");
                 return None;
@@ -1014,6 +1106,33 @@ impl Agent {
                 .await
             {
                 debug!("Failed to store session summary: {e}");
+            }
+
+            // Extract knowledge triples from the summary for cross-session accumulation.
+            // Facts/preferences were already captured per-turn; summaries yield
+            // higher-level entity relationships that span the entire session.
+            use crate::memory_extractor;
+            match memory_extractor::extract_from_summary(self.provider.as_ref(), &summary).await {
+                Ok(triples) => {
+                    for triple in &triples {
+                        if let Err(e) = mgr.add_triple(
+                            triple.subject.clone(),
+                            triple.predicate.clone(),
+                            triple.object.clone(),
+                            Some(self.id),
+                            0.7, // slightly lower confidence than per-turn (0.8)
+                            "session-summary".into(),
+                        ) {
+                            debug!("Failed to store session triple: {e}");
+                        }
+                    }
+                    if !triples.is_empty() {
+                        info!("Extracted {} triples from session summary", triples.len());
+                    }
+                }
+                Err(e) => {
+                    debug!("Session summary triple extraction failed (non-fatal): {e}");
+                }
             }
         }
 
