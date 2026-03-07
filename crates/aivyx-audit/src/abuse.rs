@@ -105,7 +105,7 @@ impl AbuseDetector {
 
         // Prune old events
         let cutoff = now - chrono::Duration::seconds(self.config.window_secs as i64);
-        while events.front().map_or(false, |e| e.timestamp < cutoff) {
+        while events.front().is_some_and(|e| e.timestamp < cutoff) {
             events.pop_front();
         }
 

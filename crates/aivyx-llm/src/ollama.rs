@@ -62,11 +62,11 @@ impl OllamaProvider {
                         Content::Blocks(blocks) => {
                             let mapped: Vec<serde_json::Value> = blocks
                                 .iter()
-                                .filter_map(|b| match b {
+                                .map(|b| match b {
                                     ContentBlock::Text { text } => {
-                                        Some(serde_json::json!({"type": "text", "text": text}))
+                                        serde_json::json!({"type": "text", "text": text})
                                     }
-                                    ContentBlock::Image { source } => Some(match source {
+                                    ContentBlock::Image { source } => match source {
                                         ImageSource::Base64 { media_type, data } => {
                                             serde_json::json!({
                                                 "type": "image_url",
@@ -81,7 +81,7 @@ impl OllamaProvider {
                                                 "image_url": {"url": url}
                                             })
                                         }
-                                    }),
+                                    },
                                 })
                                 .collect();
                             serde_json::json!(mapped)

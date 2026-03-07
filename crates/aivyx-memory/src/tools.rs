@@ -428,7 +428,7 @@ impl Tool for MemoryRetrieveTool {
             "vector" => RetrievalStrategy::Vector,
             "keyword" => RetrievalStrategy::Keyword,
             "graph" => RetrievalStrategy::Graph,
-            "auto" | _ => RetrievalRouter::route(query),
+            _ => RetrievalRouter::route(query),
         };
 
         let strategy_name = match &strategy {

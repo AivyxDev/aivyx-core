@@ -304,26 +304,26 @@ impl MemoryStore {
                 }
 
                 // Success filter
-                if let Some(success) = filter.success {
-                    if record.success != success {
-                        continue;
-                    }
+                if let Some(success) = filter.success
+                    && record.success != success
+                {
+                    continue;
                 }
 
                 // Agent name filter
-                if let Some(ref agent_name) = filter.agent_name {
-                    if record.agent_name != *agent_name {
-                        continue;
-                    }
+                if let Some(ref agent_name) = filter.agent_name
+                    && record.agent_name != *agent_name
+                {
+                    continue;
                 }
 
                 results.push(record);
 
                 // Limit
-                if let Some(limit) = filter.limit {
-                    if results.len() >= limit {
-                        break;
-                    }
+                if let Some(limit) = filter.limit
+                    && results.len() >= limit
+                {
+                    break;
                 }
             }
         }

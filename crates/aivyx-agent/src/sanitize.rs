@@ -35,13 +35,9 @@ pub fn sanitize_user_input(input: &str) -> String {
     for (pattern, replacement) in INJECTION_PATTERNS {
         // Case-insensitive replacement for robustness
         // Use simple iterative replacement since patterns don't overlap
-        loop {
-            if let Some(pos) = result.to_lowercase().find(&pattern.to_lowercase()) {
-                let end = pos + pattern.len();
-                result = format!("{}{}{}", &result[..pos], replacement, &result[end..]);
-            } else {
-                break;
-            }
+        while let Some(pos) = result.to_lowercase().find(&pattern.to_lowercase()) {
+            let end = pos + pattern.len();
+            result = format!("{}{}{}", &result[..pos], replacement, &result[end..]);
         }
     }
     result

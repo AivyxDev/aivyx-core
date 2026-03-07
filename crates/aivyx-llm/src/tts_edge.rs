@@ -103,10 +103,9 @@ impl TtsProvider for EdgeTtsProvider {
 
         // Read the output audio file
         let audio = tokio::fs::read(&output_path).await.map_err(|e| {
-            AivyxError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("failed to read edge-tts output: {e}"),
-            ))
+            AivyxError::Io(std::io::Error::other(format!(
+                "failed to read edge-tts output: {e}"
+            )))
         })?;
 
         // Clean up temp file

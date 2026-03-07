@@ -119,7 +119,8 @@ impl KnowledgeGraph {
 
         let mut paths = Vec::new();
         // (current_entity, current_path_hops)
-        let mut queue: VecDeque<(String, Vec<(String, String, String)>)> = VecDeque::new();
+        type PathHops = Vec<(String, String, String)>;
+        let mut queue: VecDeque<(String, PathHops)> = VecDeque::new();
         let mut visited = HashSet::new();
 
         visited.insert(entity.to_string());
@@ -161,8 +162,8 @@ impl KnowledgeGraph {
 
         let mut results = Vec::new();
         // (current_entity, path_so_far, visited_set)
-        let mut queue: VecDeque<(String, Vec<(String, String, String)>, HashSet<String>)> =
-            VecDeque::new();
+        type PathHopsWithVisited = (String, Vec<(String, String, String)>, HashSet<String>);
+        let mut queue: VecDeque<PathHopsWithVisited> = VecDeque::new();
 
         let mut initial_visited = HashSet::new();
         initial_visited.insert(from.to_string());
