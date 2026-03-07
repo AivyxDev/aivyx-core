@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 aivyx-core = { workspace = true }
 aivyx-crypto = { workspace = true }
+aivyx-federation = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

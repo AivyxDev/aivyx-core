@@ -209,4 +209,15 @@ impl FederationClient {
     pub fn http(&self) -> &reqwest::Client {
         &self.http
     }
+
+    /// Get the trust policy for a specific peer, if configured.
+    pub async fn peer_trust_policy(
+        &self,
+        peer_id: &str,
+    ) -> Option<crate::config::TrustPolicy> {
+        let peers = self.peers.read().await;
+        peers
+            .get(peer_id)
+            .and_then(|p| p.config.trust_policy.clone())
+    }
 }

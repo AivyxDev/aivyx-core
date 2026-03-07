@@ -4,6 +4,7 @@
 //! crates: identity types, error handling, autonomy tiers, principal
 //! identification, and the [`Tool`] and [`ChannelAdapter`] traits.
 
+pub mod a2a;
 pub mod autonomy;
 pub mod cache;
 pub mod error;

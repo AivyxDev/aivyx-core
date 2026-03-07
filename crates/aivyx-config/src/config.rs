@@ -70,6 +70,13 @@ pub struct AivyxConfig {
     ///
     /// `None` means voice features are disabled.
     pub speech: Option<SpeechConfig>,
+    /// Federation configuration for cross-instance agent communication.
+    ///
+    /// Enables Ed25519-authenticated peer-to-peer communication between
+    /// separate Aivyx Engine instances. `None` means federation is disabled.
+    /// Stored as `[federation]` in TOML.
+    #[serde(default)]
+    pub federation: Option<aivyx_federation::config::FederationConfig>,
 }
 
 impl AivyxConfig {

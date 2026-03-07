@@ -17,6 +17,12 @@ pub struct ServerConfig {
     /// Maximum WebSocket message size in bytes (default: 1 MiB).
     #[serde(default = "default_ws_max_message_size")]
     pub ws_max_message_size: usize,
+    /// Public-facing base URL for this instance (used in A2A Agent Card).
+    ///
+    /// Example: `"https://api.aivyx.io"`. When absent, the Agent Card
+    /// falls back to `http://localhost:<port>`.
+    #[serde(default)]
+    pub public_url: Option<String>,
     /// Per-endpoint rate limiting configuration (default: disabled).
     #[serde(default)]
     pub rate_limit: Option<RateLimitConfig>,
@@ -63,6 +69,7 @@ impl Default for ServerConfig {
             port: default_port(),
             cors_origins: Vec::new(),
             ws_max_message_size: default_ws_max_message_size(),
+            public_url: None,
             rate_limit: None,
         }
     }
