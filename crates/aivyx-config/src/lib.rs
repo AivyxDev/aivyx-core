@@ -24,7 +24,7 @@ pub use channel::{ChannelConfig, ChannelPlatform};
 pub use config::AivyxConfig;
 pub use dirs::AivyxDirs;
 pub use embedding::EmbeddingConfig;
-pub use mcp::{McpServerConfig, McpTransport};
+pub use mcp::{McpAuthConfig, McpAuthMethod, McpServerConfig, McpTransport};
 pub use memory::MemoryConfig;
 pub use plugin::{PluginEntry, PluginSource};
 pub use project::ProjectConfig;

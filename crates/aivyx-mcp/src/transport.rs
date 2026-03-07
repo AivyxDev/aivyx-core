@@ -16,7 +16,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
-use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
+use crate::client::SamplingHandler;
+use crate::protocol::{
+    JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, SamplingRequest,
+};
 
 /// Trait for MCP transport layers that send requests and receive responses.
 #[async_trait]
@@ -39,9 +42,13 @@ type PendingMap = HashMap<u64, oneshot::Sender<JsonRpcResponse>>;
 /// Spawns the MCP server as a child process. JSON-RPC messages are written
 /// to stdin (newline-delimited) and responses are read from stdout by a
 /// background reader task.
+///
+/// Supports bidirectional communication: the reader recognizes both responses
+/// to our requests AND incoming requests from the server (e.g.,
+/// `sampling/createMessage`), dispatching the latter to a [`SamplingHandler`].
 pub struct StdioTransport {
     /// Handle to child process stdin for writing requests.
-    stdin: Mutex<tokio::process::ChildStdin>,
+    stdin: Arc<Mutex<tokio::process::ChildStdin>>,
     /// Pending response waiters, shared with the background reader.
     pending: Arc<Mutex<PendingMap>>,
     /// Background reader task handle.
@@ -61,6 +68,32 @@ impl StdioTransport {
         args: &[String],
         env: &HashMap<String, String>,
         timeout: Duration,
+    ) -> Result<Self> {
+        Self::spawn_inner(command, args, env, timeout, None).await
+    }
+
+    /// Spawn a child process with an optional sampling handler for
+    /// bidirectional MCP communication.
+    ///
+    /// When `sampling_handler` is provided, the background reader will
+    /// dispatch incoming `sampling/createMessage` requests from the MCP
+    /// server to the handler and write the response back to stdin.
+    pub async fn spawn_with_sampling(
+        command: &str,
+        args: &[String],
+        env: &HashMap<String, String>,
+        timeout: Duration,
+        sampling_handler: Arc<dyn SamplingHandler>,
+    ) -> Result<Self> {
+        Self::spawn_inner(command, args, env, timeout, Some(sampling_handler)).await
+    }
+
+    async fn spawn_inner(
+        command: &str,
+        args: &[String],
+        env: &HashMap<String, String>,
+        timeout: Duration,
+        sampling_handler: Option<Arc<dyn SamplingHandler>>,
     ) -> Result<Self> {
         let mut cmd = Command::new(command);
         cmd.args(args)
@@ -92,7 +125,13 @@ impl StdioTransport {
 
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
-        // Background task: read JSON-RPC responses from stdout line by line.
+        // Share stdin with the reader for writing sampling responses back
+        let stdin = Arc::new(Mutex::new(stdin));
+        let stdin_reader = Arc::clone(&stdin);
+
+        // Background task: read JSON-RPC messages from stdout line by line.
+        // Handles both responses (to our requests) and incoming requests
+        // (from the server, e.g., sampling/createMessage).
         let reader_handle = tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
             let mut line = String::new();
@@ -108,8 +147,8 @@ impl StdioTransport {
                                 if trimmed.is_empty() {
                                     continue;
                                 }
-                                match serde_json::from_str::<JsonRpcResponse>(trimmed) {
-                                    Ok(resp) => {
+                                match serde_json::from_str::<JsonRpcMessage>(trimmed) {
+                                    Ok(JsonRpcMessage::Response(resp)) => {
                                         if let Some(id) = resp.id {
                                             let mut map = pending_reader.lock().await;
                                             if let Some(sender) = map.remove(&id) {
@@ -117,6 +156,46 @@ impl StdioTransport {
                                             }
                                         }
                                         // Notifications (no id) are silently ignored
+                                    }
+                                    Ok(JsonRpcMessage::Request(req)) => {
+                                        // Server-initiated request — dispatch based on method
+                                        if req.method == "sampling/createMessage" {
+                                            if let Some(ref handler) = sampling_handler {
+                                                Self::handle_sampling_request(
+                                                    req.id,
+                                                    req.params,
+                                                    handler.clone(),
+                                                    stdin_reader.clone(),
+                                                )
+                                                .await;
+                                            } else {
+                                                tracing::warn!(
+                                                    "MCP server sent sampling/createMessage but no handler configured"
+                                                );
+                                                // Send error response
+                                                if let Some(id) = req.id {
+                                                    let error_resp = serde_json::json!({
+                                                        "jsonrpc": "2.0",
+                                                        "id": id,
+                                                        "error": {
+                                                            "code": -32601,
+                                                            "message": "sampling not supported"
+                                                        }
+                                                    });
+                                                    let mut json = serde_json::to_string(&error_resp)
+                                                        .unwrap_or_default();
+                                                    json.push('\n');
+                                                    let mut stdin = stdin_reader.lock().await;
+                                                    let _ = stdin.write_all(json.as_bytes()).await;
+                                                    let _ = stdin.flush().await;
+                                                }
+                                            }
+                                        } else {
+                                            tracing::debug!(
+                                                "MCP server sent unknown request method: {}",
+                                                req.method
+                                            );
+                                        }
                                     }
                                     Err(e) => {
                                         tracing::debug!(
@@ -139,13 +218,78 @@ impl StdioTransport {
         });
 
         Ok(Self {
-            stdin: Mutex::new(stdin),
+            stdin,
             pending,
             _reader_handle: reader_handle,
             shutdown_tx,
             child: Mutex::new(Some(child)),
             timeout,
         })
+    }
+
+    /// Handle a `sampling/createMessage` request from the MCP server.
+    async fn handle_sampling_request(
+        request_id: Option<u64>,
+        params: Option<serde_json::Value>,
+        handler: Arc<dyn SamplingHandler>,
+        stdin: Arc<Mutex<tokio::process::ChildStdin>>,
+    ) {
+        let Some(id) = request_id else {
+            tracing::warn!("sampling/createMessage request has no ID — cannot respond");
+            return;
+        };
+
+        let sampling_req = match params {
+            Some(p) => match serde_json::from_value::<SamplingRequest>(p) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("failed to parse sampling request: {e}");
+                    let error_resp = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {"code": -32602, "message": format!("invalid params: {e}")}
+                    });
+                    let mut json = serde_json::to_string(&error_resp).unwrap_or_default();
+                    json.push('\n');
+                    let mut stdin = stdin.lock().await;
+                    let _ = stdin.write_all(json.as_bytes()).await;
+                    let _ = stdin.flush().await;
+                    return;
+                }
+            },
+            None => {
+                tracing::warn!("sampling/createMessage request has no params");
+                return;
+            }
+        };
+
+        match handler.create_message(sampling_req).await {
+            Ok(response) => {
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": response,
+                });
+                let mut json = serde_json::to_string(&resp).unwrap_or_default();
+                json.push('\n');
+                let mut stdin = stdin.lock().await;
+                let _ = stdin.write_all(json.as_bytes()).await;
+                let _ = stdin.flush().await;
+            }
+            Err(e) => {
+                tracing::error!("sampling handler error: {e}");
+                let error_resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {"code": -32000, "message": e.to_string()}
+                });
+                let mut json = serde_json::to_string(&error_resp).unwrap_or_default();
+                json.push('\n');
+                let mut stdin = stdin.lock().await;
+                let _ = stdin.write_all(json.as_bytes()).await;
+                let _ = stdin.flush().await;
+            }
+        }
     }
 
     /// Write a JSON-RPC message to the child's stdin.
@@ -224,11 +368,16 @@ impl McpTransportLayer for StdioTransport {
 ///
 /// For the streamable HTTP transport, JSON-RPC requests are sent as POST
 /// requests and responses come back in the HTTP response body.
+///
+/// Optionally includes an `Authorization` header on every request for
+/// authenticated MCP servers (Bearer token or OAuth access token).
 pub struct SseTransport {
     /// HTTP client instance.
     client: reqwest::Client,
     /// Server endpoint URL.
     url: String,
+    /// Optional Authorization header value (e.g., "Bearer <token>").
+    auth_header: Option<String>,
 }
 
 impl SseTransport {
@@ -242,6 +391,23 @@ impl SseTransport {
         Self {
             client,
             url: url.to_string(),
+            auth_header: None,
+        }
+    }
+
+    /// Create a new SSE transport with an Authorization header.
+    ///
+    /// The `auth_header` should be the full header value, e.g., `"Bearer <token>"`.
+    pub fn with_auth(url: &str, timeout: Duration, auth_header: String) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .unwrap_or_default();
+
+        Self {
+            client,
+            url: url.to_string(),
+            auth_header: Some(auth_header),
         }
     }
 }
@@ -249,10 +415,16 @@ impl SseTransport {
 #[async_trait]
 impl McpTransportLayer for SseTransport {
     async fn send(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
-        let resp = self
+        let mut req_builder = self
             .client
             .post(&self.url)
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json");
+
+        if let Some(ref auth) = self.auth_header {
+            req_builder = req_builder.header("Authorization", auth);
+        }
+
+        let resp = req_builder
             .json(request)
             .send()
             .await
@@ -275,10 +447,16 @@ impl McpTransportLayer for SseTransport {
     }
 
     async fn notify(&self, request: &JsonRpcRequest) -> Result<()> {
-        let resp = self
+        let mut req_builder = self
             .client
             .post(&self.url)
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json");
+
+        if let Some(ref auth) = self.auth_header {
+            req_builder = req_builder.header("Authorization", auth);
+        }
+
+        let resp = req_builder
             .json(request)
             .send()
             .await

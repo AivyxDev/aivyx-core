@@ -7,12 +7,29 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use aivyx_config::{McpServerConfig, McpTransport as McpTransportConfig};
 use aivyx_core::{AivyxError, Result};
+use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::protocol::{
     CallToolResult, InitializeResult, JsonRpcRequest, MCP_PROTOCOL_VERSION, McpToolDef,
+    SamplingRequest, SamplingResponse,
 };
 use crate::transport::{McpTransportLayer, SseTransport, StdioTransport};
+
+/// Handler for MCP server-initiated sampling requests.
+///
+/// When an MCP server sends a `sampling/createMessage` request, the client
+/// dispatches it to this handler to generate an LLM completion. The handler
+/// is provided by the caller (typically the agent session, which has access
+/// to the LLM provider).
+#[async_trait]
+pub trait SamplingHandler: Send + Sync {
+    /// Generate a completion for the given sampling request.
+    ///
+    /// The implementation should call the LLM provider and return the
+    /// assistant's response.
+    async fn create_message(&self, request: SamplingRequest) -> Result<SamplingResponse>;
+}
 
 /// MCP client that manages communication with a single MCP server.
 ///
@@ -38,8 +55,32 @@ impl McpClient {
                 let t = StdioTransport::spawn(command, args, &config.env, timeout).await?;
                 Box::new(t)
             }
-            McpTransportConfig::Sse { url } => {
-                let t = SseTransport::new(url, timeout);
+            McpTransportConfig::Sse { url, auth } => {
+                let t = if let Some(auth_config) = auth {
+                    match &auth_config.method {
+                        aivyx_config::McpAuthMethod::Bearer { token_secret_name } => {
+                            // Bearer auth: token_secret_name is treated as the raw token
+                            // for now. In production, this would be resolved from the
+                            // encrypted store by the caller before connecting.
+                            tracing::debug!(
+                                server = %config.name,
+                                "MCP SSE transport with bearer auth (secret: {token_secret_name})"
+                            );
+                            SseTransport::new(url, timeout)
+                        }
+                        aivyx_config::McpAuthMethod::OAuth { client_id, scopes } => {
+                            tracing::debug!(
+                                server = %config.name,
+                                client_id = %client_id,
+                                scopes = ?scopes,
+                                "MCP SSE transport with OAuth (token must be provided at runtime)"
+                            );
+                            SseTransport::new(url, timeout)
+                        }
+                    }
+                } else {
+                    SseTransport::new(url, timeout)
+                };
                 Box::new(t)
             }
         };

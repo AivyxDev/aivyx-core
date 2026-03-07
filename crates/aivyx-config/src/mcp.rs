@@ -50,6 +50,38 @@ pub enum McpTransport {
     Sse {
         /// URL of the MCP server's SSE endpoint.
         url: String,
+        /// Optional authentication for the remote MCP server.
+        #[serde(default)]
+        auth: Option<McpAuthConfig>,
+    },
+}
+
+/// Authentication configuration for a remote MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpAuthConfig {
+    /// Authentication method to use.
+    pub method: McpAuthMethod,
+}
+
+/// Authentication method for MCP server connections.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum McpAuthMethod {
+    /// OAuth 2.1 with PKCE — discovers metadata from the server's
+    /// `/.well-known/oauth-authorization-server` endpoint and performs
+    /// the authorization code flow with PKCE.
+    OAuth {
+        /// OAuth client ID registered with the MCP server.
+        client_id: String,
+        /// Requested OAuth scopes.
+        #[serde(default)]
+        scopes: Vec<String>,
+    },
+    /// Static Bearer token — uses a pre-configured token stored in the
+    /// encrypted secrets store.
+    Bearer {
+        /// Name of the secret in the encrypted store containing the token.
+        token_secret_name: String,
     },
 }
 
@@ -106,6 +138,7 @@ mod tests {
             name: "remote-tools".into(),
             transport: McpTransport::Sse {
                 url: "http://localhost:3001/sse".into(),
+                auth: None,
             },
             env: HashMap::new(),
             timeout_secs: 60,
@@ -114,10 +147,80 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let restored: McpServerConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.name, "remote-tools");
-        if let McpTransport::Sse { url } = &restored.transport {
+        if let McpTransport::Sse { url, auth } = &restored.transport {
             assert_eq!(url, "http://localhost:3001/sse");
+            assert!(auth.is_none());
         } else {
             panic!("wrong transport variant");
+        }
+    }
+
+    #[test]
+    fn sse_with_oauth_config() {
+        let toml_str = r#"
+            name = "oauth-server"
+            [transport]
+            type = "sse"
+            url = "https://mcp.example.com/sse"
+            [transport.auth]
+            [transport.auth.method]
+            type = "oauth"
+            client_id = "my-client-id"
+            scopes = ["tools:read", "tools:execute"]
+        "#;
+        let config: McpServerConfig = toml::from_str(toml_str).unwrap();
+        if let McpTransport::Sse { auth: Some(auth), .. } = &config.transport {
+            match &auth.method {
+                McpAuthMethod::OAuth { client_id, scopes } => {
+                    assert_eq!(client_id, "my-client-id");
+                    assert_eq!(scopes.len(), 2);
+                }
+                _ => panic!("expected OAuth method"),
+            }
+        } else {
+            panic!("expected Sse with auth");
+        }
+    }
+
+    #[test]
+    fn sse_with_bearer_config() {
+        let toml_str = r#"
+            name = "bearer-server"
+            [transport]
+            type = "sse"
+            url = "https://mcp.example.com/sse"
+            [transport.auth]
+            [transport.auth.method]
+            type = "bearer"
+            token_secret_name = "mcp-api-key"
+        "#;
+        let config: McpServerConfig = toml::from_str(toml_str).unwrap();
+        if let McpTransport::Sse { auth: Some(auth), .. } = &config.transport {
+            match &auth.method {
+                McpAuthMethod::Bearer { token_secret_name } => {
+                    assert_eq!(token_secret_name, "mcp-api-key");
+                }
+                _ => panic!("expected Bearer method"),
+            }
+        } else {
+            panic!("expected Sse with auth");
+        }
+    }
+
+    #[test]
+    fn sse_without_auth_backwards_compatible() {
+        // Existing configs without auth field should still work
+        let toml_str = r#"
+            name = "no-auth"
+            [transport]
+            type = "sse"
+            url = "http://localhost:3001/sse"
+        "#;
+        let config: McpServerConfig = toml::from_str(toml_str).unwrap();
+        if let McpTransport::Sse { auth, .. } = &config.transport {
+            assert!(auth.is_none());
+        } else {
+            panic!("expected Sse transport");
         }
     }
 }

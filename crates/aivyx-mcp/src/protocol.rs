@@ -141,6 +141,85 @@ pub struct CallToolResult {
     pub is_error: bool,
 }
 
+// ---------------------------------------------------------------------------
+// MCP Sampling protocol types (server → client)
+// ---------------------------------------------------------------------------
+
+/// Incoming JSON-RPC request from the MCP server (e.g., `sampling/createMessage`).
+///
+/// Distinguished from `JsonRpcResponse` by having a `method` field instead of
+/// `result`/`error`. The stdio transport reader must differentiate between these.
+#[derive(Debug, Clone, Deserialize)]
+pub struct IncomingJsonRpcRequest {
+    /// Request ID from the server (must be echoed in the response).
+    pub id: Option<u64>,
+    /// Method name (e.g., "sampling/createMessage").
+    pub method: String,
+    /// Request parameters.
+    pub params: Option<Value>,
+}
+
+/// A generic JSON-RPC message that could be either a response or an incoming request.
+///
+/// Used by the stdio transport reader to distinguish between server responses
+/// (to our requests) and server-initiated requests (e.g., sampling).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum JsonRpcMessage {
+    /// A response to one of our requests (has `result` or `error`).
+    Response(JsonRpcResponse),
+    /// An incoming request from the server (has `method`).
+    Request(IncomingJsonRpcRequest),
+}
+
+/// MCP `sampling/createMessage` request parameters.
+///
+/// Sent by the MCP server when it needs an LLM completion from the client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SamplingRequest {
+    /// Messages to send to the LLM.
+    pub messages: Vec<SamplingMessage>,
+    /// Optional model preferences.
+    #[serde(default)]
+    pub model_preferences: Option<Value>,
+    /// Optional system prompt.
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    /// Maximum tokens to generate.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+}
+
+/// A message in a sampling request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamplingMessage {
+    /// Role: "user" or "assistant".
+    pub role: String,
+    /// Message content.
+    pub content: SamplingContent,
+}
+
+/// Content of a sampling message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum SamplingContent {
+    /// Text content.
+    Text { text: String },
+}
+
+/// MCP `sampling/createMessage` response — returned by the client to the server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SamplingResponse {
+    /// Role of the generated message (always "assistant").
+    pub role: String,
+    /// Generated content.
+    pub content: SamplingContent,
+    /// Model that generated the response.
+    pub model: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,5 +284,65 @@ mod tests {
         assert_eq!(result.content.len(), 1);
         assert_eq!(result.content[0].text.as_deref(), Some("hello"));
         assert!(!result.is_error);
+    }
+
+    #[test]
+    fn json_rpc_message_parses_response() {
+        let json = r#"{"id": 1, "result": {"tools": []}, "error": null}"#;
+        let msg: JsonRpcMessage = serde_json::from_str(json).unwrap();
+        assert!(matches!(msg, JsonRpcMessage::Response(_)));
+    }
+
+    #[test]
+    fn json_rpc_message_parses_incoming_request() {
+        let json = r#"{
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "sampling/createMessage",
+            "params": {
+                "messages": [{"role": "user", "content": {"type": "text", "text": "hello"}}],
+                "maxTokens": 100
+            }
+        }"#;
+        let msg: JsonRpcMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            JsonRpcMessage::Request(req) => {
+                assert_eq!(req.method, "sampling/createMessage");
+                assert_eq!(req.id, Some(42));
+            }
+            _ => panic!("expected Request variant"),
+        }
+    }
+
+    #[test]
+    fn sampling_request_deserialization() {
+        let json = r#"{
+            "messages": [
+                {"role": "user", "content": {"type": "text", "text": "What is 2+2?"}}
+            ],
+            "systemPrompt": "You are a calculator",
+            "maxTokens": 50
+        }"#;
+        let req: SamplingRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.messages.len(), 1);
+        assert_eq!(req.messages[0].role, "user");
+        assert_eq!(req.system_prompt.as_deref(), Some("You are a calculator"));
+        assert_eq!(req.max_tokens, Some(50));
+    }
+
+    #[test]
+    fn sampling_response_serialization() {
+        let resp = SamplingResponse {
+            role: "assistant".into(),
+            content: SamplingContent::Text {
+                text: "4".into(),
+            },
+            model: "claude-sonnet-4-20250514".into(),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["role"], "assistant");
+        assert_eq!(json["content"]["type"], "text");
+        assert_eq!(json["content"]["text"], "4");
+        assert_eq!(json["model"], "claude-sonnet-4-20250514");
     }
 }

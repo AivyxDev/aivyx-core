@@ -46,14 +46,16 @@
 //! # }
 //! ```
 
+pub mod auth;
 pub mod cache;
 pub mod client;
 pub mod protocol;
 pub mod proxy;
 pub mod transport;
 
+pub use auth::{McpOAuthClient, OAuthMetadata, OAuthTokens, PkceChallenge};
 pub use cache::ToolResultCache;
-pub use client::McpClient;
-pub use protocol::McpToolDef;
+pub use client::{McpClient, SamplingHandler};
+pub use protocol::{McpToolDef, SamplingContent, SamplingMessage, SamplingRequest, SamplingResponse};
 pub use proxy::McpProxyTool;
 pub use transport::McpTransportLayer;
