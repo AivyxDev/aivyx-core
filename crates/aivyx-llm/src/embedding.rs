@@ -3,6 +3,8 @@
 //! Provides the [`EmbeddingProvider`] trait and concrete implementations for
 //! Ollama and OpenAI embedding APIs, plus a factory function.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use reqwest::Client;
 use secrecy::{ExposeSecret, SecretString};
@@ -58,7 +60,13 @@ pub struct OllamaEmbeddingProvider {
 impl OllamaEmbeddingProvider {
     pub fn new(base_url: String, model: String, dims: usize) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(60))
+                .connect_timeout(Duration::from_secs(5))
+                .pool_max_idle_per_host(4)
+                .pool_idle_timeout(Duration::from_secs(90))
+                .build()
+                .expect("failed to build HTTP client"),
             base_url,
             model,
             dims,
@@ -152,7 +160,13 @@ pub struct OpenAIEmbeddingProvider {
 impl OpenAIEmbeddingProvider {
     pub fn new(api_key: SecretString, model: String, dims: usize) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(120))
+                .connect_timeout(Duration::from_secs(10))
+                .pool_max_idle_per_host(4)
+                .pool_idle_timeout(Duration::from_secs(90))
+                .build()
+                .expect("failed to build HTTP client"),
             api_key,
             model,
             dims,

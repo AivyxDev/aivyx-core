@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use reqwest::Client;
 use tracing::debug;
@@ -19,7 +21,13 @@ pub struct OllamaProvider {
 impl OllamaProvider {
     pub fn new(base_url: String, model: String) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(60))
+                .connect_timeout(Duration::from_secs(5))
+                .pool_max_idle_per_host(4)
+                .pool_idle_timeout(Duration::from_secs(90))
+                .build()
+                .expect("failed to build HTTP client"),
             base_url,
             model,
         }

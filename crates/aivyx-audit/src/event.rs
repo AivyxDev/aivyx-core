@@ -162,6 +162,20 @@ pub enum AuditEvent {
         task_id: String,
         resumed_from_step: usize,
     },
+    /// An approval gate was reached during task execution.
+    TaskApprovalRequested {
+        task_id: String,
+        step_index: usize,
+        context: String,
+    },
+    /// An approval gate was resolved (approved, rejected, or timed out).
+    TaskApprovalResolved {
+        task_id: String,
+        step_index: usize,
+        approved: bool,
+        /// How the approval was resolved: "user", "timeout_auto", "timeout_reject".
+        method: String,
+    },
     /// A project was registered.
     ProjectRegistered {
         /// The project's slug name.

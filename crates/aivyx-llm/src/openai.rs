@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use reqwest::Client;
 use secrecy::{ExposeSecret, SecretString};
@@ -22,7 +24,13 @@ pub struct OpenAIProvider {
 impl OpenAIProvider {
     pub fn new(api_key: SecretString, model: String) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(120))
+                .connect_timeout(Duration::from_secs(10))
+                .pool_max_idle_per_host(4)
+                .pool_idle_timeout(Duration::from_secs(90))
+                .build()
+                .expect("failed to build HTTP client"),
             api_key,
             model,
             api_url: "https://api.openai.com/v1/chat/completions".into(),
