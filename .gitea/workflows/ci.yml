@@ -3,7 +3,7 @@
 # Uses the self-hosted runner on the Gitea VPS.
 #
 # Runs cargo build/test/clippy/fmt inside a Docker container because
-# the bare VPS doesn't have Node.js (required by actions/checkout@v4).
+# the bare VPS doesn't have the required build toolchain.
 
 name: CI
 
@@ -16,6 +16,7 @@ on:
 jobs:
   check:
     runs-on: self-hosted
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -50,3 +51,9 @@ jobs:
 
               echo "✓ All checks passed"
             '
+
+      - name: Cleanup Docker
+        if: always()
+        run: |
+          docker system prune -f --filter "until=24h" 2>/dev/null || true
+          docker image prune -af --filter "until=48h" 2>/dev/null || true
