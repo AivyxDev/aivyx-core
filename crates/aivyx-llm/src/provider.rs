@@ -26,6 +26,15 @@ pub trait LlmProvider: Send + Sync {
     /// Human-readable name of this provider.
     fn name(&self) -> &str;
 
+    /// The model identifier used by this provider (e.g. `"claude-sonnet-4-20250514"`,
+    /// `"gpt-4o"`).
+    ///
+    /// Used in audit events and cost tracking. Defaults to `"unknown"` — override
+    /// in provider implementations.
+    fn model_name(&self) -> &str {
+        "unknown"
+    }
+
     /// Return the context window size (max input tokens) for this provider.
     ///
     /// Defaults to 200,000 tokens (safe for most modern models).

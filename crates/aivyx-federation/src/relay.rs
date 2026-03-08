@@ -1,6 +1,7 @@
 //! Relay operations — cross-instance chat, task creation, and federated search.
 
 use aivyx_core::AivyxError;
+use futures_util::future::join_all;
 
 use crate::client::FederationClient;
 use crate::types::{
@@ -198,6 +199,9 @@ impl FederationClient {
     }
 
     /// Search memory across federated peers.
+    ///
+    /// Queries all matching peers in parallel for maximum throughput, then
+    /// merges results by descending score.
     pub async fn federated_search(
         &self,
         req: &FederatedSearchRequest,
@@ -214,15 +218,22 @@ impl FederationClient {
             req.peers.clone()
         };
 
-        let mut all_results = Vec::new();
+        // Fire all peer searches concurrently.
+        let futures: Vec<_> = peer_ids
+            .iter()
+            .map(|peer_id| self.search_peer(peer_id, &req.query, req.limit))
+            .collect();
 
-        for peer_id in &peer_ids {
-            match self.search_peer(peer_id, &req.query, req.limit).await {
+        let outcomes = join_all(futures).await;
+
+        let mut all_results = Vec::new();
+        for (i, outcome) in outcomes.into_iter().enumerate() {
+            match outcome {
                 Ok(mut results) => {
                     all_results.append(&mut results);
                 }
                 Err(e) => {
-                    tracing::warn!(peer = %peer_id, error = %e, "federated search failed for peer");
+                    tracing::warn!(peer = %peer_ids[i], error = %e, "federated search failed for peer");
                 }
             }
         }

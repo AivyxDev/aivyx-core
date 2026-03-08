@@ -11,7 +11,7 @@ use serde::Deserialize;
 use tracing::{debug, info, warn};
 
 use aivyx_core::{AgentId, Result};
-use aivyx_llm::{ChatMessage, ChatRequest, LlmProvider, Role};
+use aivyx_llm::{ChatMessage, ChatRequest, LlmProvider, Role, TokenUsage};
 
 /// Extraction results parsed from the LLM response.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -79,6 +79,14 @@ If there's nothing worth remembering, respond with:
 {"facts": [], "preferences": [], "triples": [], "corrections": []}
 "#;
 
+/// Result of a memory extraction attempt, including token usage.
+pub struct ExtractionOutput {
+    /// The extraction results (facts, preferences, triples, corrections).
+    pub result: ExtractionResult,
+    /// Token usage from the LLM call, if one was made.
+    pub usage: Option<TokenUsage>,
+}
+
 /// Extract memories from the most recent conversation exchange.
 ///
 /// Takes the last N messages from the conversation (user + assistant) and asks
@@ -87,11 +95,14 @@ pub async fn extract_from_turn(
     provider: &dyn LlmProvider,
     conversation: &[ChatMessage],
     max_messages: usize,
-) -> Result<ExtractionResult> {
+) -> Result<ExtractionOutput> {
     // Take the last N messages (typically 2–4: user + assistant exchanges)
     let recent: Vec<&ChatMessage> = conversation.iter().rev().take(max_messages).collect();
     if recent.is_empty() {
-        return Ok(ExtractionResult::default());
+        return Ok(ExtractionOutput {
+            result: ExtractionResult::default(),
+            usage: None,
+        });
     }
 
     // Format the conversation excerpt
@@ -106,7 +117,10 @@ pub async fn extract_from_turn(
     }
 
     if excerpt.trim().is_empty() {
-        return Ok(ExtractionResult::default());
+        return Ok(ExtractionOutput {
+            result: ExtractionResult::default(),
+            usage: None,
+        });
     }
 
     // Ask the LLM to extract
@@ -121,6 +135,7 @@ pub async fn extract_from_turn(
     };
 
     let response = provider.chat(&request).await?;
+    let usage = response.usage;
     let text = response.message.content.text().trim();
 
     // Parse JSON — be tolerant of markdown fences
@@ -137,11 +152,17 @@ pub async fn extract_from_turn(
                     result.triples.len()
                 );
             }
-            Ok(result)
+            Ok(ExtractionOutput {
+                result,
+                usage: Some(usage),
+            })
         }
         Err(e) => {
             debug!("Failed to parse extraction result: {e} — text: {json_text}");
-            Ok(ExtractionResult::default())
+            Ok(ExtractionOutput {
+                result: ExtractionResult::default(),
+                usage: Some(usage),
+            })
         }
     }
 }

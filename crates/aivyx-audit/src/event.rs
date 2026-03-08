@@ -1,5 +1,6 @@
 use aivyx_core::{
-    AgentId, AutonomyTier, CapabilityId, MemoryId, Principal, SessionId, ToolId, TripleId,
+    AgentId, AutonomyTier, CapabilityId, MemoryId, Principal, SessionId, TaskId, TaskStatus, ToolId,
+    TripleId,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -80,6 +81,22 @@ pub enum AuditEvent {
         output_tokens: u32,
         stop_reason: String,
     },
+    /// Conversation history was compressed to fit the context window.
+    ConversationCompressed {
+        agent_id: AgentId,
+        /// Number of messages before compression.
+        messages_before: usize,
+        /// Number of messages after compression.
+        messages_after: usize,
+    },
+    /// Post-turn memory extraction completed (background LLM call).
+    MemoryExtractionCompleted {
+        agent_id: AgentId,
+        /// Number of items extracted (facts + preferences + triples).
+        items_extracted: usize,
+        input_tokens: u32,
+        output_tokens: u32,
+    },
     /// A task was delegated from one team member to another.
     TeamDelegation {
         from: String,
@@ -139,38 +156,46 @@ pub enum AuditEvent {
     },
     /// A new task/mission was created.
     TaskCreated {
-        task_id: String,
+        task_id: TaskId,
         agent_name: String,
         goal: String,
     },
     /// A task step completed (success or failure).
     TaskStepCompleted {
-        task_id: String,
+        task_id: TaskId,
         step_index: usize,
         step_description: String,
         success: bool,
     },
-    /// A task mission completed or failed.
+    /// A task completed successfully.
     TaskCompleted {
-        task_id: String,
-        status: String,
+        task_id: TaskId,
+        status: TaskStatus,
+        steps_completed: usize,
+        steps_total: usize,
+    },
+    /// A task failed with an error.
+    TaskFailed {
+        task_id: TaskId,
+        step_index: usize,
+        error: String,
         steps_completed: usize,
         steps_total: usize,
     },
     /// A task was resumed from checkpoint.
     TaskResumed {
-        task_id: String,
+        task_id: TaskId,
         resumed_from_step: usize,
     },
     /// An approval gate was reached during task execution.
     TaskApprovalRequested {
-        task_id: String,
+        task_id: TaskId,
         step_index: usize,
         context: String,
     },
     /// An approval gate was resolved (approved, rejected, or timed out).
     TaskApprovalResolved {
-        task_id: String,
+        task_id: TaskId,
         step_index: usize,
         approved: bool,
         /// How the approval was resolved: "user", "timeout_auto", "timeout_reject".
@@ -678,7 +703,7 @@ mod tests {
     #[test]
     fn task_created_serde_roundtrip() {
         let event = AuditEvent::TaskCreated {
-            task_id: "abc-123".into(),
+            task_id: TaskId::new(),
             agent_name: "researcher".into(),
             goal: "Research Rust async".into(),
         };
@@ -693,7 +718,7 @@ mod tests {
     #[test]
     fn task_step_completed_serde_roundtrip() {
         let event = AuditEvent::TaskStepCompleted {
-            task_id: "abc-123".into(),
+            task_id: TaskId::new(),
             step_index: 2,
             step_description: "Search for tokio docs".into(),
             success: true,
@@ -715,8 +740,8 @@ mod tests {
     #[test]
     fn task_completed_serde_roundtrip() {
         let event = AuditEvent::TaskCompleted {
-            task_id: "abc-123".into(),
-            status: "Completed".into(),
+            task_id: TaskId::new(),
+            status: TaskStatus::Completed,
             steps_completed: 5,
             steps_total: 5,
         };
@@ -727,9 +752,36 @@ mod tests {
     }
 
     #[test]
+    fn task_failed_serde_roundtrip() {
+        let event = AuditEvent::TaskFailed {
+            task_id: TaskId::new(),
+            step_index: 2,
+            error: "API rate limit exceeded".into(),
+            steps_completed: 2,
+            steps_total: 5,
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::TaskFailed {
+            step_index,
+            error,
+            steps_completed,
+            steps_total,
+            ..
+        } = restored
+        {
+            assert_eq!(step_index, 2);
+            assert_eq!(error, "API rate limit exceeded");
+            assert_eq!(steps_completed, 2);
+            assert_eq!(steps_total, 5);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
     fn task_resumed_serde_roundtrip() {
         let event = AuditEvent::TaskResumed {
-            task_id: "abc-123".into(),
+            task_id: TaskId::new(),
             resumed_from_step: 3,
         };
         let restored = roundtrip(&event);
@@ -1580,6 +1632,51 @@ mod tests {
         {
             assert_eq!(size_bytes, 2_000_000);
             assert_eq!(max_bytes, 1_048_576);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn conversation_compressed_serde_roundtrip() {
+        let event = AuditEvent::ConversationCompressed {
+            agent_id: AgentId::new(),
+            messages_before: 42,
+            messages_after: 17,
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::ConversationCompressed {
+            messages_before,
+            messages_after,
+            ..
+        } = restored
+        {
+            assert_eq!(messages_before, 42);
+            assert_eq!(messages_after, 17);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn memory_extraction_completed_serde_roundtrip() {
+        let event = AuditEvent::MemoryExtractionCompleted {
+            agent_id: AgentId::new(),
+            items_extracted: 5,
+            input_tokens: 800,
+            output_tokens: 120,
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::MemoryExtractionCompleted {
+            items_extracted,
+            input_tokens,
+            output_tokens,
+            ..
+        } = restored
+        {
+            assert_eq!(items_extracted, 5);
+            assert_eq!(input_tokens, 800);
+            assert_eq!(output_tokens, 120);
         } else {
             panic!("wrong variant");
         }

@@ -5,7 +5,15 @@
 //! a compact summary message.
 
 use aivyx_core::Result;
-use aivyx_llm::{ChatMessage, ChatRequest, LlmProvider, Role};
+use aivyx_llm::{ChatMessage, ChatRequest, LlmProvider, Role, TokenUsage};
+
+/// Result of a compression attempt, including token usage if an LLM call was made.
+pub struct CompressionResult {
+    /// The (possibly compressed) message list.
+    pub messages: Vec<ChatMessage>,
+    /// Token usage from the summarization LLM call, if compression occurred.
+    pub usage: Option<TokenUsage>,
+}
 
 /// Compress a conversation if it exceeds the context window threshold.
 ///
@@ -13,16 +21,19 @@ use aivyx_llm::{ChatMessage, ChatRequest, LlmProvider, Role};
 /// `context_window`, the older 60% of messages are summarized via an LLM
 /// call and replaced with a single system-role summary message.
 ///
-/// Returns the (possibly compressed) message list.
+/// Returns the (possibly compressed) message list and token usage.
 pub async fn compress_conversation(
     provider: &dyn LlmProvider,
     messages: &[ChatMessage],
     context_window: u32,
     threshold_pct: f32,
-) -> Result<Vec<ChatMessage>> {
+) -> Result<CompressionResult> {
     // Only attempt compression if there are enough messages
     if messages.len() <= 4 {
-        return Ok(messages.to_vec());
+        return Ok(CompressionResult {
+            messages: messages.to_vec(),
+            usage: None,
+        });
     }
 
     // Estimate current token usage
@@ -30,7 +41,10 @@ pub async fn compress_conversation(
     let threshold = (context_window as f32 * threshold_pct) as u32;
 
     if estimated_tokens < threshold {
-        return Ok(messages.to_vec());
+        return Ok(CompressionResult {
+            messages: messages.to_vec(),
+            usage: None,
+        });
     }
 
     // Split: older 60% -> summarize, recent 40% -> keep
@@ -58,6 +72,7 @@ pub async fn compress_conversation(
     };
 
     let response = provider.chat(&summary_request).await?;
+    let usage = response.usage;
 
     // Build compressed conversation: summary + recent messages
     let mut compressed = Vec::with_capacity(1 + recent_messages.len());
@@ -67,7 +82,10 @@ pub async fn compress_conversation(
     )));
     compressed.extend_from_slice(recent_messages);
 
-    Ok(compressed)
+    Ok(CompressionResult {
+        messages: compressed,
+        usage: Some(usage),
+    })
 }
 
 /// Return a human-readable label for a message role.
@@ -119,7 +137,8 @@ mod tests {
         let result = compress_conversation(&provider, &messages, 200_000, 0.8)
             .await
             .unwrap();
-        assert_eq!(result.len(), 2); // unchanged - too few messages
+        assert_eq!(result.messages.len(), 2); // unchanged - too few messages
+        assert!(result.usage.is_none());
     }
 
     #[tokio::test]
@@ -142,8 +161,12 @@ mod tests {
             .await
             .unwrap();
         // Should be compressed: 1 summary + 40% of 40 = 16 recent
-        assert!(result.len() < messages.len());
-        assert!(result[0].content.text().contains("[Conversation summary]"));
+        assert!(result.messages.len() < messages.len());
+        assert!(result.messages[0]
+            .content
+            .text()
+            .contains("[Conversation summary]"));
+        assert!(result.usage.is_some());
     }
 
     #[tokio::test]
@@ -161,7 +184,8 @@ mod tests {
         let result = compress_conversation(&provider, &messages, 10, 0.1)
             .await
             .unwrap();
-        assert_eq!(result.len(), 4);
+        assert_eq!(result.messages.len(), 4);
+        assert!(result.usage.is_none());
     }
 
     #[test]

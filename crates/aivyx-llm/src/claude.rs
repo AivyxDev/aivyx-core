@@ -202,6 +202,10 @@ impl LlmProvider for ClaudeProvider {
         "claude"
     }
 
+    fn model_name(&self) -> &str {
+        &self.model
+    }
+
     async fn chat(&self, request: &ChatRequest) -> Result<ChatResponse> {
         let body = self.build_request_body(request);
 

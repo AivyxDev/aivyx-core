@@ -13,6 +13,7 @@ pub mod principal;
 pub mod progress;
 pub mod scope;
 pub mod storage;
+pub mod task_status;
 pub mod tool_registry;
 pub mod traits;
 
@@ -30,5 +31,6 @@ pub use storage::{
     PostgresBackend, PostgresConfig, RedisConfig, RedisSessionCache, SessionCacheBackend,
     StorageBackend,
 };
+pub use task_status::TaskStatus;
 pub use tool_registry::ToolRegistry;
 pub use traits::{ChannelAdapter, Tool};

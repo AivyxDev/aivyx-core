@@ -10,6 +10,7 @@ members = [
     "crates/aivyx-memory",
     "crates/aivyx-agent",
     "crates/aivyx-federation",
+    "crates/aivyx-task",
 ]
 resolver = "3"
 
@@ -122,3 +123,4 @@ aivyx-mcp = { path = "crates/aivyx-mcp" }
 aivyx-memory = { path = "crates/aivyx-memory" }
 aivyx-agent = { path = "crates/aivyx-agent" }
 aivyx-federation = { path = "crates/aivyx-federation" }
+aivyx-task = { path = "crates/aivyx-task" }

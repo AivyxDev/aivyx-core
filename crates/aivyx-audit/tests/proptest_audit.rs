@@ -1,5 +1,5 @@
 use aivyx_audit::{AuditEvent, AuditLog};
-use aivyx_core::{AgentId, AutonomyTier};
+use aivyx_core::{AgentId, AutonomyTier, TaskId};
 use chrono::Utc;
 use proptest::prelude::*;
 
@@ -29,7 +29,7 @@ fn arb_audit_event() -> impl Strategy<Value = AuditEvent> {
             remote_addr: "10.0.0.1:5678".into(),
         }),
         ".*".prop_map(|goal| AuditEvent::TaskCreated {
-            task_id: "test-task-id".into(),
+            task_id: TaskId::new(),
             agent_name: "test-agent".into(),
             goal,
         }),

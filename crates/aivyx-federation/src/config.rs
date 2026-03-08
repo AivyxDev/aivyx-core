@@ -1,5 +1,6 @@
 //! Federation configuration types.
 
+use aivyx_core::AutonomyTier;
 use serde::{Deserialize, Serialize};
 
 /// Top-level federation configuration (from `[federation]` in config.toml).
@@ -63,10 +64,9 @@ pub struct TrustPolicy {
 
     /// Maximum autonomy tier for relayed requests.
     ///
-    /// One of `"locked"`, `"leash"`, `"trust"`, `"free"`.
-    /// Defaults to `"leash"` (agent can propose actions but needs confirmation).
+    /// Defaults to `Leash` (agent can propose actions but needs confirmation).
     #[serde(default = "default_max_tier")]
-    pub max_tier: String,
+    pub max_tier: AutonomyTier,
 }
 
 /// Failover configuration for federated relay operations.
@@ -87,8 +87,8 @@ impl Default for FailoverConfig {
     }
 }
 
-fn default_max_tier() -> String {
-    "leash".to_string()
+fn default_max_tier() -> AutonomyTier {
+    AutonomyTier::Leash
 }
 
 fn default_capabilities() -> Vec<String> {
@@ -142,5 +142,30 @@ mod tests {
         let config: FederationConfig = serde_json::from_str(json).unwrap();
         assert!(config.failover.enabled);
         assert_eq!(config.failover.max_attempts, 3);
+    }
+
+    #[test]
+    fn trust_policy_max_tier_default() {
+        let json = r#"{"allowed_scopes": ["memory"]}"#;
+        let policy: TrustPolicy = serde_json::from_str(json).unwrap();
+        assert_eq!(policy.max_tier, AutonomyTier::Leash);
+    }
+
+    #[test]
+    fn trust_policy_max_tier_roundtrip() {
+        let policy = TrustPolicy {
+            allowed_scopes: vec!["chat".into()],
+            max_tier: AutonomyTier::Trust,
+        };
+        let json = serde_json::to_string(&policy).unwrap();
+        let parsed: TrustPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.max_tier, AutonomyTier::Trust);
+        assert_eq!(parsed.allowed_scopes, vec!["chat"]);
+    }
+
+    #[test]
+    fn trust_policy_rejects_invalid_tier() {
+        let json = r#"{"allowed_scopes": [], "max_tier": "invalid"}"#;
+        assert!(serde_json::from_str::<TrustPolicy>(json).is_err());
     }
 }

@@ -9,6 +9,7 @@ use secrecy::SecretString;
 use crate::claude::ClaudeProvider;
 use crate::ollama::OllamaProvider;
 use crate::openai::OpenAIProvider;
+use crate::openai_compat::OpenAICompatibleProvider;
 use crate::provider::LlmProvider;
 use crate::stt::SttProvider;
 use crate::stt_ollama::OllamaSttProvider;
@@ -36,6 +37,23 @@ pub fn create_provider(
             base_url.clone(),
             model.clone(),
         ))),
+        ProviderConfig::OpenAICompatible {
+            api_key_ref,
+            base_url,
+            model,
+        } => {
+            let api_key = match api_key_ref {
+                Some(key_ref) => Some(resolve_api_key(key_ref, store, master_key)?),
+                None => None,
+            };
+            Ok(Box::new(OpenAICompatibleProvider::new(
+                api_key,
+                model.clone(),
+                base_url.clone(),
+                "openai-compatible".into(),
+                120,
+            )))
+        }
     }
 }
 

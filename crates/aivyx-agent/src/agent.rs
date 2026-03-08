@@ -368,7 +368,7 @@ impl Agent {
             self.audit_event(AuditEvent::LlmRequestSent {
                 agent_id: self.id,
                 provider: self.provider.name().to_string(),
-                model: String::new(),
+                model: self.provider.model_name().to_string(),
             });
 
             let response = self.chat_with_retry(&request).await?;
@@ -418,9 +418,9 @@ impl Agent {
                     self.conversation.push(response.message);
 
                     // Add each tool result with sanitized boundary markers
-                    for result in tool_results {
+                    for (tool_name, result) in tool_results {
                         self.conversation
-                            .push(ChatMessage::tool(Self::wrap_tool_result(result)));
+                            .push(ChatMessage::tool(Self::wrap_tool_result(&tool_name, result)));
                     }
                 }
             }
@@ -504,7 +504,7 @@ impl Agent {
             self.audit_event(AuditEvent::LlmRequestSent {
                 agent_id: self.id,
                 provider: self.provider.name().to_string(),
-                model: String::new(),
+                model: self.provider.model_name().to_string(),
             });
 
             // Use streaming for the LLM call
@@ -594,9 +594,9 @@ impl Agent {
                     tool_calls_made += tool_results.len() as u32;
 
                     self.conversation.push(message);
-                    for result in tool_results {
+                    for (tool_name, result) in tool_results {
                         self.conversation
-                            .push(ChatMessage::tool(Self::wrap_tool_result(result)));
+                            .push(ChatMessage::tool(Self::wrap_tool_result(&tool_name, result)));
                     }
                     // Continue loop — next iteration will stream again
                 }
@@ -628,15 +628,28 @@ impl Agent {
         )
         .await
         {
-            Ok(compressed) => {
-                if compressed.len() < self.conversation.len() {
+            Ok(result) => {
+                if result.messages.len() < self.conversation.len() {
+                    let before = self.conversation.len();
+                    let after = result.messages.len();
                     debug!(
                         agent = %self.name,
-                        before = self.conversation.len(),
-                        after = compressed.len(),
+                        before,
+                        after,
                         "compressed conversation history"
                     );
-                    self.conversation = compressed;
+                    // Track cost of the summarization LLM call
+                    if let Some(ref usage) = result.usage
+                        && let Err(e) = self.cost_tracker.track(usage)
+                    {
+                        warn!("Failed to track compression cost: {e}");
+                    }
+                    self.audit_event(AuditEvent::ConversationCompressed {
+                        agent_id: self.id,
+                        messages_before: before,
+                        messages_after: after,
+                    });
+                    self.conversation = result.messages;
                 }
             }
             Err(e) => {
@@ -671,16 +684,18 @@ impl Agent {
         }
     }
 
+    /// Execute all tool calls from a response, returning (tool_name, result) pairs.
     async fn execute_tool_calls(
         &mut self,
         response: &ChatResponse,
         channel: Option<&dyn ChannelAdapter>,
-    ) -> Result<Vec<ToolResult>> {
+    ) -> Result<Vec<(String, ToolResult)>> {
         let mut results = Vec::new();
 
         for tc in &response.message.tool_calls {
+            let tool_name = tc.name.clone();
             let result = self.execute_single_tool(tc, channel).await;
-            results.push(result);
+            results.push((tool_name, result));
         }
 
         Ok(results)
@@ -876,16 +891,13 @@ impl Agent {
     /// Wrap a tool result's content in `[TOOL_OUTPUT]` boundary markers for
     /// privileged context separation. This prevents prompt injection via tool
     /// outputs by clearly delineating untrusted data.
-    fn wrap_tool_result(mut result: ToolResult) -> ToolResult {
+    fn wrap_tool_result(tool_name: &str, mut result: ToolResult) -> ToolResult {
         // Extract a text representation of the tool output
         let text = match &result.content {
             serde_json::Value::String(s) => s.clone(),
             other => serde_json::to_string(other).unwrap_or_default(),
         };
-        // Re-wrap content with boundary markers. We preserve the tool_call_id
-        // (which maps to the original tool call) so the LLM can correlate.
-        let tool_name = result.tool_call_id.clone();
-        let wrapped = crate::sanitize::wrap_tool_output(&tool_name, &text);
+        let wrapped = crate::sanitize::wrap_tool_output(tool_name, &text);
         result.content = serde_json::Value::String(wrapped);
         result
     }
@@ -1169,10 +1181,28 @@ impl Agent {
         match memory_extractor::extract_from_turn(self.provider.as_ref(), &self.conversation, 4)
             .await
         {
-            Ok(result) => {
-                let total = result.facts.len() + result.preferences.len() + result.triples.len();
+            Ok(output) => {
+                // Track cost of the extraction LLM call
+                if let Some(ref usage) = output.usage
+                    && let Err(e) = self.cost_tracker.track(usage)
+                {
+                    warn!("Failed to track extraction cost: {e}");
+                }
+
+                let total = output.result.facts.len()
+                    + output.result.preferences.len()
+                    + output.result.triples.len();
+
+                // Audit the extraction
+                self.audit_event(AuditEvent::MemoryExtractionCompleted {
+                    agent_id: self.id,
+                    items_extracted: total,
+                    input_tokens: output.usage.as_ref().map_or(0, |u| u.input_tokens),
+                    output_tokens: output.usage.as_ref().map_or(0, |u| u.output_tokens),
+                });
+
                 if total > 0 {
-                    memory_extractor::store_extractions(&mgr, &result, Some(self.id)).await;
+                    memory_extractor::store_extractions(&mgr, &output.result, Some(self.id)).await;
                 }
             }
             Err(e) => {
@@ -1194,8 +1224,8 @@ fn truncate(s: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::built_in_tools::FileReadTool;
     use crate::cost_tracker::CostTracker;
+    use crate::filesystem_tools::FileReadTool;
     use crate::rate_limiter::RateLimiter;
     use aivyx_capability::{ActionPattern, Capability, CapabilitySet};
     use aivyx_core::{CapabilityId, CapabilityScope, Tool as _, ToolRegistry};

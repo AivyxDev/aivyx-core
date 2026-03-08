@@ -2,9 +2,9 @@ use aivyx_audit::AuditLog;
 use aivyx_capability::{ActionPattern, Capability, CapabilitySet};
 use aivyx_config::{AivyxConfig, AivyxDirs, ModelPricing};
 use aivyx_core::{AgentId, AivyxError, CapabilityId, Principal, Result, ToolRegistry};
-use aivyx_crypto::{
-    EncryptedStore, MasterKey, derive_audit_key, derive_memory_key, derive_tool_key,
-};
+#[cfg(feature = "network-tools")]
+use aivyx_crypto::derive_tool_key;
+use aivyx_crypto::{EncryptedStore, MasterKey, derive_audit_key, derive_memory_key};
 use aivyx_llm::create_provider;
 use chrono::Utc;
 
@@ -224,11 +224,13 @@ impl AgentSession {
         }
 
         // Phase 11D: Contextual infrastructure tools (need AivyxDirs)
+        #[cfg(feature = "infrastructure-tools")]
         agent.register_tool(Box::new(
             crate::infrastructure_tools::ScheduleTaskTool::new(self.dirs.clone()),
         ));
 
         // Phase 11C: Contextual network/communication tools (need encrypted store access)
+        #[cfg(feature = "network-tools")]
         {
             let tool_key = derive_tool_key(&self.master_key);
             let provider_config = self.config.resolve_provider(None).clone();
@@ -238,6 +240,7 @@ impl AgentSession {
                 tool_key,
             )));
         }
+        #[cfg(feature = "network-tools")]
         {
             let tool_key = derive_tool_key(&self.master_key);
             agent.register_tool(Box::new(crate::network_tools::NotificationSendTool::new(
@@ -246,6 +249,7 @@ impl AgentSession {
                 tool_key,
             )));
         }
+        #[cfg(feature = "network-tools")]
         {
             let tool_key = derive_tool_key(&self.master_key);
             agent.register_tool(Box::new(crate::network_tools::EmailSendTool::new(

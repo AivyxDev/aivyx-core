@@ -25,6 +25,17 @@ pub enum ProviderConfig {
         /// Model name available on the Ollama instance.
         model: String,
     },
+    /// Any OpenAI-compatible API (Groq, Together AI, Mistral, DeepSeek,
+    /// OpenRouter, xAI, vLLM, LM Studio, etc.).
+    OpenAICompatible {
+        /// Name of the API key in the encrypted store (optional for local servers).
+        api_key_ref: Option<String>,
+        /// Base URL of the API server (e.g. "https://api.groq.com/openai").
+        /// `/v1/chat/completions` is appended automatically.
+        base_url: String,
+        /// Model identifier.
+        model: String,
+    },
 }
 
 /// Per-token pricing for an LLM model.
@@ -81,6 +92,7 @@ impl ProviderConfig {
             ProviderConfig::Claude { model, .. } => model,
             ProviderConfig::OpenAI { model, .. } => model,
             ProviderConfig::Ollama { model, .. } => model,
+            ProviderConfig::OpenAICompatible { model, .. } => model,
         }
     }
 }
@@ -150,6 +162,45 @@ mod tests {
     fn provider_config_model_name() {
         let c = ProviderConfig::default();
         assert!(c.model_name().contains("claude"));
+    }
+
+    #[test]
+    fn openai_compatible_toml_roundtrip() {
+        let p = ProviderConfig::OpenAICompatible {
+            api_key_ref: Some("groq_key".into()),
+            base_url: "https://api.groq.com/openai".into(),
+            model: "llama-3.3-70b-versatile".into(),
+        };
+        let toml_str = toml::to_string(&p).unwrap();
+        let parsed: ProviderConfig = toml::from_str(&toml_str).unwrap();
+        assert!(matches!(parsed, ProviderConfig::OpenAICompatible { .. }));
+    }
+
+    #[test]
+    fn openai_compatible_no_auth_toml_roundtrip() {
+        let p = ProviderConfig::OpenAICompatible {
+            api_key_ref: None,
+            base_url: "http://localhost:8080".into(),
+            model: "my-local-model".into(),
+        };
+        let toml_str = toml::to_string(&p).unwrap();
+        let parsed: ProviderConfig = toml::from_str(&toml_str).unwrap();
+        match parsed {
+            ProviderConfig::OpenAICompatible { api_key_ref, .. } => {
+                assert!(api_key_ref.is_none());
+            }
+            _ => panic!("expected OpenAICompatible"),
+        }
+    }
+
+    #[test]
+    fn openai_compatible_model_name() {
+        let p = ProviderConfig::OpenAICompatible {
+            api_key_ref: None,
+            base_url: "http://localhost:8080".into(),
+            model: "deepseek-r1".into(),
+        };
+        assert_eq!(p.model_name(), "deepseek-r1");
     }
 
     #[test]

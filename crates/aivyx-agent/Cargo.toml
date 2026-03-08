@@ -30,25 +30,28 @@ glob = { workspace = true }
 csv = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
-calamine = { workspace = true }
-pdf-extract = { workspace = true }
-plotters = { workspace = true }
-tera = { workspace = true }
-pulldown-cmark = { workspace = true }
+calamine = { workspace = true, optional = true }
+pdf-extract = { workspace = true, optional = true }
+plotters = { workspace = true, optional = true }
+tera = { workspace = true, optional = true }
+pulldown-cmark = { workspace = true, optional = true }
 hex = { workspace = true }
-scraper = { workspace = true }
-lettre = { workspace = true }
-rusqlite = { workspace = true }
-zip = { workspace = true }
-diffy = { workspace = true }
-tar = { workspace = true }
-flate2 = { workspace = true }
+scraper = { workspace = true, optional = true }
+lettre = { workspace = true, optional = true }
+rusqlite = { workspace = true, optional = true }
+zip = { workspace = true, optional = true }
+diffy = { workspace = true, optional = true }
+tar = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
 aivyx-memory = { workspace = true, optional = true }
 aivyx-mcp = { workspace = true, optional = true }
 aivyx-federation = { workspace = true, optional = true }
 
 [features]
-default = ["memory", "mcp"]
+default = ["memory", "mcp", "document-tools", "network-tools", "infrastructure-tools"]
 memory = ["dep:aivyx-memory"]
 mcp = ["dep:aivyx-mcp"]
 federation = ["dep:aivyx-federation"]
+document-tools = ["dep:calamine", "dep:pdf-extract", "dep:plotters", "dep:tera", "dep:pulldown-cmark"]
+network-tools = ["dep:scraper", "dep:lettre"]
+infrastructure-tools = ["dep:rusqlite", "dep:zip", "dep:tar", "dep:flate2", "dep:diffy"]

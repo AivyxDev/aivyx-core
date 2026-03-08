@@ -65,26 +65,29 @@ impl FederationClient {
     }
 
     /// Probe all peers for health and agent availability.
+    ///
+    /// Pings all peers concurrently for faster health discovery.
     pub async fn probe_peers(&self) {
         let peer_configs: Vec<PeerConfig> = {
             let peers = self.peers.read().await;
             peers.values().map(|p| p.config.clone()).collect()
         };
 
-        for peer_config in peer_configs {
-            match self.ping_peer(&peer_config).await {
-                Ok(ping) => {
-                    let mut peers = self.peers.write().await;
-                    if let Some(state) = peers.get_mut(&peer_config.id) {
+        let futures: Vec<_> = peer_configs.iter().map(|pc| self.ping_peer(pc)).collect();
+
+        let outcomes = futures_util::future::join_all(futures).await;
+
+        let mut peers = self.peers.write().await;
+        for (peer_config, outcome) in peer_configs.iter().zip(outcomes) {
+            if let Some(state) = peers.get_mut(&peer_config.id) {
+                match outcome {
+                    Ok(ping) => {
                         state.healthy = true;
                         state.last_seen = Some(chrono::Utc::now());
                         state.agents = ping.agents;
                         tracing::debug!(peer = %peer_config.id, "federation peer healthy");
                     }
-                }
-                Err(e) => {
-                    let mut peers = self.peers.write().await;
-                    if let Some(state) = peers.get_mut(&peer_config.id) {
+                    Err(e) => {
                         state.healthy = false;
                         tracing::warn!(peer = %peer_config.id, error = %e, "federation peer unreachable");
                     }
