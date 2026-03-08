@@ -67,12 +67,7 @@ impl TaskStore {
     ///
     /// Loads the task, applies `f`, and saves the result in a single logical
     /// operation. Returns the updated task, or an error if the task is not found.
-    pub fn update(
-        &self,
-        id: &TaskId,
-        key: &MasterKey,
-        f: impl FnOnce(&mut Task),
-    ) -> Result<Task> {
+    pub fn update(&self, id: &TaskId, key: &MasterKey, f: impl FnOnce(&mut Task)) -> Result<Task> {
         let mut task = self
             .get(id, key)?
             .ok_or_else(|| aivyx_core::AivyxError::Other(format!("task not found: {id}")))?;

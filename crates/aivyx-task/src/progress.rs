@@ -84,15 +84,14 @@ mod tests {
         let event = ProgressEvent::StepsPlanned {
             task_id: test_task_id(),
             step_count: 3,
-            step_descriptions: vec![
-                "step 1".into(),
-                "step 2".into(),
-                "step 3".into(),
-            ],
+            step_descriptions: vec!["step 1".into(), "step 2".into(), "step 3".into()],
         };
         let json = serde_json::to_string(&event).unwrap();
         let parsed: ProgressEvent = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, ProgressEvent::StepsPlanned { step_count: 3, .. }));
+        assert!(matches!(
+            parsed,
+            ProgressEvent::StepsPlanned { step_count: 3, .. }
+        ));
     }
 
     #[test]
@@ -104,7 +103,10 @@ mod tests {
         };
         let json = serde_json::to_string(&event).unwrap();
         let parsed: ProgressEvent = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, ProgressEvent::StepStarted { step_index: 0, .. }));
+        assert!(matches!(
+            parsed,
+            ProgressEvent::StepStarted { step_index: 0, .. }
+        ));
     }
 
     #[test]
@@ -117,7 +119,10 @@ mod tests {
         };
         let json = serde_json::to_string(&event).unwrap();
         let parsed: ProgressEvent = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, ProgressEvent::StepCompleted { step_index: 1, .. }));
+        assert!(matches!(
+            parsed,
+            ProgressEvent::StepCompleted { step_index: 1, .. }
+        ));
     }
 
     #[test]
@@ -130,7 +135,10 @@ mod tests {
         };
         let json = serde_json::to_string(&event).unwrap();
         let parsed: ProgressEvent = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, ProgressEvent::ApprovalRequired { step_index: 2, .. }));
+        assert!(matches!(
+            parsed,
+            ProgressEvent::ApprovalRequired { step_index: 2, .. }
+        ));
     }
 
     #[test]
@@ -142,7 +150,10 @@ mod tests {
         };
         let json = serde_json::to_string(&event).unwrap();
         let parsed: ProgressEvent = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, ProgressEvent::ApprovalResolved { approved: true, .. }));
+        assert!(matches!(
+            parsed,
+            ProgressEvent::ApprovalResolved { approved: true, .. }
+        ));
     }
 
     #[test]
@@ -194,6 +205,9 @@ mod tests {
         sink.emit(event).await.unwrap();
 
         let received = rx.recv().await.unwrap();
-        assert!(matches!(received, ProgressEvent::StepStarted { step_index: 0, .. }));
+        assert!(matches!(
+            received,
+            ProgressEvent::StepStarted { step_index: 0, .. }
+        ));
     }
 }

@@ -146,7 +146,10 @@ mod tests {
         assert_eq!(TaskStatus::Planned.to_string(), "planned");
         assert_eq!(TaskStatus::Executing.to_string(), "executing");
         assert_eq!(TaskStatus::Verifying.to_string(), "verifying");
-        assert_eq!(TaskStatus::AwaitingApproval.to_string(), "awaiting_approval");
+        assert_eq!(
+            TaskStatus::AwaitingApproval.to_string(),
+            "awaiting_approval"
+        );
         assert_eq!(TaskStatus::Completed.to_string(), "completed");
         assert_eq!(TaskStatus::Failed.to_string(), "failed");
         assert_eq!(TaskStatus::Cancelled.to_string(), "cancelled");

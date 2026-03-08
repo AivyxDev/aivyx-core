@@ -201,10 +201,7 @@ mod tests {
     #[test]
     fn set_steps_transitions_to_planned() {
         let mut task = Task::new("goal", "agent");
-        let steps = vec![
-            TaskStep::new(0, "step one"),
-            TaskStep::new(1, "step two"),
-        ];
+        let steps = vec![TaskStep::new(0, "step one"), TaskStep::new(1, "step two")];
         task.set_steps(steps);
         assert_eq!(task.status, TaskStatus::Planned);
         assert_eq!(task.steps.len(), 2);

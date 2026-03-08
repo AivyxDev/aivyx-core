@@ -184,7 +184,10 @@ mod tests {
     #[test]
     fn display_formatting() {
         assert_eq!(TaskStatus::Planning.to_string(), "planning");
-        assert_eq!(TaskStatus::AwaitingApproval.to_string(), "awaiting_approval");
+        assert_eq!(
+            TaskStatus::AwaitingApproval.to_string(),
+            "awaiting_approval"
+        );
         assert_eq!(TaskStatus::Cancelled.to_string(), "cancelled");
     }
 }

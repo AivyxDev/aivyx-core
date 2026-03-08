@@ -162,10 +162,12 @@ mod tests {
             .unwrap();
         // Should be compressed: 1 summary + 40% of 40 = 16 recent
         assert!(result.messages.len() < messages.len());
-        assert!(result.messages[0]
-            .content
-            .text()
-            .contains("[Conversation summary]"));
+        assert!(
+            result.messages[0]
+                .content
+                .text()
+                .contains("[Conversation summary]")
+        );
         assert!(result.usage.is_some());
     }
 

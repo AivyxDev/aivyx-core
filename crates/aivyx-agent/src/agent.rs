@@ -420,7 +420,9 @@ impl Agent {
                     // Add each tool result with sanitized boundary markers
                     for (tool_name, result) in tool_results {
                         self.conversation
-                            .push(ChatMessage::tool(Self::wrap_tool_result(&tool_name, result)));
+                            .push(ChatMessage::tool(Self::wrap_tool_result(
+                                &tool_name, result,
+                            )));
                     }
                 }
             }
@@ -596,7 +598,9 @@ impl Agent {
                     self.conversation.push(message);
                     for (tool_name, result) in tool_results {
                         self.conversation
-                            .push(ChatMessage::tool(Self::wrap_tool_result(&tool_name, result)));
+                            .push(ChatMessage::tool(Self::wrap_tool_result(
+                                &tool_name, result,
+                            )));
                     }
                     // Continue loop — next iteration will stream again
                 }
