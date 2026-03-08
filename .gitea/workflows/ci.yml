@@ -46,7 +46,7 @@ jobs:
               cargo fmt --all -- --check
 
               echo "=== Audit ==="
-              cargo install cargo-audit --quiet 2>/dev/null || true
+              cargo install cargo-audit --quiet
               cargo audit
 
               echo "✓ All checks passed"
