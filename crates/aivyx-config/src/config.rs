@@ -260,6 +260,33 @@ impl AivyxConfig {
         Ok(self.channels.remove(idx))
     }
 
+    /// Find a trigger by name.
+    pub fn find_trigger(&self, name: &str) -> Option<&TriggerConfig> {
+        self.triggers.iter().find(|t| t.name == name)
+    }
+
+    /// Add a trigger. Returns an error if the name already exists.
+    pub fn add_trigger(&mut self, trigger: TriggerConfig) -> Result<()> {
+        if self.triggers.iter().any(|t| t.name == trigger.name) {
+            return Err(AivyxError::Config(format!(
+                "trigger '{}' already exists",
+                trigger.name
+            )));
+        }
+        self.triggers.push(trigger);
+        Ok(())
+    }
+
+    /// Remove a trigger by name. Returns the removed entry, or an error if not found.
+    pub fn remove_trigger(&mut self, name: &str) -> Result<TriggerConfig> {
+        let idx = self
+            .triggers
+            .iter()
+            .position(|t| t.name == name)
+            .ok_or_else(|| AivyxError::Config(format!("trigger '{name}' not found")))?;
+        Ok(self.triggers.remove(idx))
+    }
+
     /// Get a config value by dotted key path (e.g., "autonomy.default_tier").
     pub fn get(&self, key: &str) -> Option<String> {
         let value = toml::to_string(self).ok()?;
