@@ -555,6 +555,18 @@ pub enum AuditEvent {
         /// Human-readable details.
         details: String,
     },
+    /// A bearer token was generated via passphrase exchange.
+    TokenGenerated {
+        /// Method used to generate the token (e.g., "passphrase_exchange").
+        method: String,
+    },
+    /// A document was ingested into the memory system (RAG).
+    DocumentIngested {
+        /// Name of the source document file.
+        document_name: String,
+        /// Number of text chunks stored.
+        chunks: usize,
+    },
 }
 
 #[cfg(test)]
