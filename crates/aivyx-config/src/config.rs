@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::autonomy_policy::AutonomyPolicy;
 use crate::channel::ChannelConfig;
 use crate::embedding::EmbeddingConfig;
+use crate::heartbeat::HeartbeatConfig;
 use crate::memory::MemoryConfig;
 use crate::plugin::PluginEntry;
 use crate::project::ProjectConfig;
@@ -49,6 +50,16 @@ pub struct AivyxConfig {
     /// the result as a notification. Stored as `[[schedules]]` in TOML.
     #[serde(default)]
     pub schedules: Vec<ScheduleEntry>,
+    /// Heartbeat configuration for autonomous agent self-checks.
+    ///
+    /// When enabled, a background loop periodically gathers context (pending
+    /// notifications, memory health, user-defined goals) and lets the agent
+    /// decide whether proactive action is needed. Unlike schedules (static
+    /// prompts on cron), the heartbeat is context-aware and skips the LLM
+    /// call when nothing has changed. Stored as `[heartbeat]` in TOML.
+    #[serde(default)]
+    pub heartbeat: Option<HeartbeatConfig>,
+
     /// Inbound communication channels (Telegram, Email, etc.).
     ///
     /// Each channel connects to an external messaging platform and routes

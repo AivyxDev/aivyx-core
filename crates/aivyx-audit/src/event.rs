@@ -231,6 +231,31 @@ pub enum AuditEvent {
         /// One-line summary of the result (truncated to ~200 chars).
         result_summary: String,
     },
+    /// A heartbeat tick fired.
+    HeartbeatFired {
+        /// Agent profile used for the heartbeat.
+        agent_name: String,
+        /// Number of context sections gathered (0 = skipped).
+        context_sections: usize,
+        /// Timestamp of the fire.
+        timestamp: DateTime<Utc>,
+    },
+    /// A heartbeat tick completed.
+    HeartbeatCompleted {
+        /// Agent profile used for the heartbeat.
+        agent_name: String,
+        /// Whether the agent decided to act.
+        acted: bool,
+        /// Number of actions taken (notifications stored, messages sent, etc.).
+        actions_taken: usize,
+        /// Brief summary of the heartbeat outcome.
+        summary: String,
+    },
+    /// A heartbeat tick was skipped (no context to review).
+    HeartbeatSkipped {
+        /// Reason the tick was skipped.
+        reason: String,
+    },
     /// A notification was stored for the user.
     NotificationStored {
         /// The notification ID.

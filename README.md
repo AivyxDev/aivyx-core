@@ -12,7 +12,7 @@
 
 ## Overview
 
-`aivyx-core` is a Cargo workspace of **10 crates** (~42,800 lines of Rust, ~711 tests) that form the shared layer between:
+`aivyx-core` is a Cargo workspace of **10 crates** (~45,200 lines of Rust, ~805 tests) that form the shared layer between:
 
 - **[Aivyx](https://github.com/AivyxDev/aivyx)** — the public CLI + Desktop app (MIT)
 - **[Aivyx Engine](https://aivyx-gitea.cloud/AivyxDev/aivyx-engine)** — the private server and orchestration layer (Proprietary)

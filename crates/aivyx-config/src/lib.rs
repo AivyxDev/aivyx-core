@@ -8,6 +8,7 @@ pub mod channel;
 pub mod config;
 pub mod dirs;
 pub mod embedding;
+pub mod heartbeat;
 pub mod mcp;
 pub mod memory;
 pub mod plugin;
@@ -25,6 +26,7 @@ pub use config::{
     AivyxConfig, BackupConfig, BillingConfig, DefaultQuotas, GroupRoleMappingConfig,
     OidcProviderConfig, SsoConfig, TenantsConfig, TriggerConfig,
 };
+pub use heartbeat::HeartbeatConfig;
 pub use dirs::AivyxDirs;
 pub use embedding::EmbeddingConfig;
 pub use mcp::{McpAuthConfig, McpAuthMethod, McpServerConfig, McpTransport};

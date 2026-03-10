@@ -55,6 +55,8 @@ pub enum ChannelPlatform {
     Slack,
     /// Matrix client-server API (sync polling).
     Matrix,
+    /// WhatsApp Business Cloud API (webhook).
+    WhatsApp,
 }
 
 fn default_true() -> bool {
@@ -88,6 +90,7 @@ impl fmt::Display for ChannelPlatform {
             ChannelPlatform::Discord => write!(f, "discord"),
             ChannelPlatform::Slack => write!(f, "slack"),
             ChannelPlatform::Matrix => write!(f, "matrix"),
+            ChannelPlatform::WhatsApp => write!(f, "whatsapp"),
         }
     }
 }
@@ -143,6 +146,7 @@ mod tests {
         assert_eq!(ChannelPlatform::Discord.to_string(), "discord");
         assert_eq!(ChannelPlatform::Slack.to_string(), "slack");
         assert_eq!(ChannelPlatform::Matrix.to_string(), "matrix");
+        assert_eq!(ChannelPlatform::WhatsApp.to_string(), "whatsapp");
     }
 
     #[test]
