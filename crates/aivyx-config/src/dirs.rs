@@ -1,4 +1,5 @@
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -150,18 +151,22 @@ fn create_dir_restricted(path: &Path) -> Result<()> {
     if !path.exists() {
         fs::create_dir_all(path)?;
     }
+    // On Unix, restrict directory permissions to owner-only (0o700).
     // Best-effort: in Docker containers with bind mounts, the container user
     // may not own the directory and chmod will fail with EPERM. This is safe
     // to ignore — the directory was likely created with adequate permissions
     // by the entrypoint or Docker runtime.
-    if let Err(e) = fs::set_permissions(path, fs::Permissions::from_mode(0o700)) {
-        if e.kind() == std::io::ErrorKind::PermissionDenied {
-            eprintln!(
-                "  [warn] could not set permissions on {}: {e} (ok in Docker)",
-                path.display()
-            );
-        } else {
-            return Err(e.into());
+    #[cfg(unix)]
+    {
+        if let Err(e) = fs::set_permissions(path, fs::Permissions::from_mode(0o700)) {
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                eprintln!(
+                    "  [warn] could not set permissions on {}: {e} (ok in Docker)",
+                    path.display()
+                );
+            } else {
+                return Err(e.into());
+            }
         }
     }
     Ok(())
@@ -216,45 +221,51 @@ mod tests {
         assert!(root.exists());
         assert!(dirs.keys_dir().exists());
 
-        let meta = fs::metadata(&root).unwrap();
-        assert_eq!(meta.permissions().mode() & 0o777, 0o700);
+        #[cfg(unix)]
+        {
+            let meta = fs::metadata(&root).unwrap();
+            assert_eq!(meta.permissions().mode() & 0o777, 0o700);
 
-        let keys_meta = fs::metadata(dirs.keys_dir()).unwrap();
-        assert_eq!(keys_meta.permissions().mode() & 0o777, 0o700);
+            let keys_meta = fs::metadata(dirs.keys_dir()).unwrap();
+            assert_eq!(keys_meta.permissions().mode() & 0o777, 0o700);
+        }
 
         assert!(dirs.agents_dir().exists());
         assert!(dirs.teams_dir().exists());
         assert!(dirs.sessions_dir().exists());
-        let agents_meta = fs::metadata(dirs.agents_dir()).unwrap();
-        assert_eq!(agents_meta.permissions().mode() & 0o777, 0o700);
-        let teams_meta = fs::metadata(dirs.teams_dir()).unwrap();
-        assert_eq!(teams_meta.permissions().mode() & 0o777, 0o700);
-        let sessions_meta = fs::metadata(dirs.sessions_dir()).unwrap();
-        assert_eq!(sessions_meta.permissions().mode() & 0o777, 0o700);
+
+        #[cfg(unix)]
+        {
+            let agents_meta = fs::metadata(dirs.agents_dir()).unwrap();
+            assert_eq!(agents_meta.permissions().mode() & 0o777, 0o700);
+            let teams_meta = fs::metadata(dirs.teams_dir()).unwrap();
+            assert_eq!(teams_meta.permissions().mode() & 0o777, 0o700);
+            let sessions_meta = fs::metadata(dirs.sessions_dir()).unwrap();
+            assert_eq!(sessions_meta.permissions().mode() & 0o777, 0o700);
+        }
 
         assert!(dirs.memory_dir().exists());
-        let memory_meta = fs::metadata(dirs.memory_dir()).unwrap();
-        assert_eq!(memory_meta.permissions().mode() & 0o777, 0o700);
-
         assert!(dirs.tasks_dir().exists());
-        let tasks_meta = fs::metadata(dirs.tasks_dir()).unwrap();
-        assert_eq!(tasks_meta.permissions().mode() & 0o777, 0o700);
-
         assert!(dirs.schedules_dir().exists());
-        let schedules_meta = fs::metadata(dirs.schedules_dir()).unwrap();
-        assert_eq!(schedules_meta.permissions().mode() & 0o777, 0o700);
-
         assert!(dirs.skills_dir().exists());
-        let skills_meta = fs::metadata(dirs.skills_dir()).unwrap();
-        assert_eq!(skills_meta.permissions().mode() & 0o777, 0o700);
-
         assert!(dirs.team_sessions_dir().exists());
-        let team_sessions_meta = fs::metadata(dirs.team_sessions_dir()).unwrap();
-        assert_eq!(team_sessions_meta.permissions().mode() & 0o777, 0o700);
-
         assert!(dirs.roles_dir().exists());
-        let roles_meta = fs::metadata(dirs.roles_dir()).unwrap();
-        assert_eq!(roles_meta.permissions().mode() & 0o777, 0o700);
+
+        #[cfg(unix)]
+        {
+            let memory_meta = fs::metadata(dirs.memory_dir()).unwrap();
+            assert_eq!(memory_meta.permissions().mode() & 0o777, 0o700);
+            let tasks_meta = fs::metadata(dirs.tasks_dir()).unwrap();
+            assert_eq!(tasks_meta.permissions().mode() & 0o777, 0o700);
+            let schedules_meta = fs::metadata(dirs.schedules_dir()).unwrap();
+            assert_eq!(schedules_meta.permissions().mode() & 0o777, 0o700);
+            let skills_meta = fs::metadata(dirs.skills_dir()).unwrap();
+            assert_eq!(skills_meta.permissions().mode() & 0o777, 0o700);
+            let team_sessions_meta = fs::metadata(dirs.team_sessions_dir()).unwrap();
+            assert_eq!(team_sessions_meta.permissions().mode() & 0o777, 0o700);
+            let roles_meta = fs::metadata(dirs.roles_dir()).unwrap();
+            assert_eq!(roles_meta.permissions().mode() & 0o777, 0o700);
+        }
 
         fs::remove_dir_all(&root).ok();
     }
