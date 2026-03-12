@@ -139,6 +139,12 @@ pub struct KnowledgeTriple {
     pub attachment_ids: Vec<String>,
     /// When this triple was created.
     pub created_at: DateTime<Utc>,
+    /// When this triple was last reinforced (None = never reinforced).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reinforced_at: Option<DateTime<Utc>>,
+    /// How many times this triple has been reinforced.
+    #[serde(default)]
+    pub reinforce_count: u32,
 }
 
 impl KnowledgeTriple {
@@ -161,6 +167,8 @@ impl KnowledgeTriple {
             source,
             attachment_ids: Vec::new(),
             created_at: Utc::now(),
+            reinforced_at: None,
+            reinforce_count: 0,
         }
     }
 }

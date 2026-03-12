@@ -21,8 +21,8 @@ pub use autonomy::AutonomyTier;
 pub use cache::Cacheable;
 pub use error::{AivyxError, Result, ResultExt};
 pub use id::{
-    AgentId, CapabilityId, MemoryId, MessageId, NotificationId, OutcomeId, SessionId, SkillId,
-    TaskId, TenantId, ToolId, TripleId,
+    AgentId, CapabilityId, MemoryId, MessageId, NotificationId, OutcomeId, PatternId, SessionId,
+    SkillId, TaskId, TenantId, ToolId, TripleId,
 };
 pub use principal::Principal;
 pub use progress::{ChannelProgressSink, NoopProgressSink, ProgressSink};

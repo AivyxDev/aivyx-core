@@ -221,13 +221,14 @@ pub async fn store_extractions(
     }
 
     for triple in &result.triples {
-        match mgr.add_triple(
+        match mgr.add_or_reinforce_triple(
             triple.subject.clone(),
             triple.predicate.clone(),
             triple.object.clone(),
             agent_id,
-            0.8, // default confidence for extraction
+            0.8, // default confidence for new triples
             "auto-extract".into(),
+            0.05, // reinforce boost when re-extracted
         ) {
             Ok(_) => stored += 1,
             Err(e) => {

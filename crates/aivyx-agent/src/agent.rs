@@ -1137,13 +1137,14 @@ impl Agent {
             match memory_extractor::extract_from_summary(self.provider.as_ref(), &summary).await {
                 Ok(triples) => {
                     for triple in &triples {
-                        if let Err(e) = mgr.add_triple(
+                        if let Err(e) = mgr.add_or_reinforce_triple(
                             triple.subject.clone(),
                             triple.predicate.clone(),
                             triple.object.clone(),
                             Some(self.id),
                             0.7, // slightly lower confidence than per-turn (0.8)
                             "session-summary".into(),
+                            0.05, // reinforce boost when re-extracted
                         ) {
                             debug!("Failed to store session triple: {e}");
                         }

@@ -9,6 +9,7 @@ pub mod graph;
 pub mod manager;
 pub mod notification;
 pub mod outcome;
+pub mod pattern;
 pub mod profile;
 pub mod profile_extractor;
 pub mod retrieval;
@@ -22,6 +23,7 @@ pub use graph::{Community, GraphEdge, GraphPath, KnowledgeGraph, Neighborhood};
 pub use manager::{MemoryManager, MemoryStats};
 pub use notification::{Notification, NotificationStore, Rating};
 pub use outcome::{OutcomeFilter, OutcomeRecord, OutcomeSource};
+pub use pattern::{MiningConfig, PatternFilter, WorkflowPattern};
 pub use profile::{PROFILE_VERSION, ProjectEntry, RecurringTask, UserProfile};
 pub use retrieval::{
     Attribution, RetrievalResult, RetrievalRouter, RetrievalSource, RetrievalStrategy,

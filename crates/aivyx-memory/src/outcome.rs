@@ -8,6 +8,8 @@ use aivyx_core::{OutcomeId, TaskId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::notification::Rating;
+
 /// A recorded outcome from an agent operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutcomeRecord {
@@ -33,6 +35,12 @@ pub struct OutcomeRecord {
     pub tags: Vec<String>,
     /// When this outcome was recorded.
     pub created_at: DateTime<Utc>,
+    /// Human feedback rating (None = unrated).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_rating: Option<Rating>,
+    /// Human feedback comment (None = no feedback).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_feedback: Option<String>,
 }
 
 /// What produced an outcome.
@@ -77,6 +85,8 @@ impl OutcomeRecord {
             tools_used: Vec::new(),
             tags: Vec::new(),
             created_at: Utc::now(),
+            human_rating: None,
+            human_feedback: None,
         }
     }
 
@@ -97,6 +107,23 @@ impl OutcomeRecord {
         self.tags = tags;
         self
     }
+
+    /// Set a human rating on this outcome.
+    pub fn with_rating(mut self, rating: Rating) -> Self {
+        self.human_rating = Some(rating);
+        self
+    }
+
+    /// Set human feedback text on this outcome.
+    pub fn with_feedback(mut self, feedback: impl Into<String>) -> Self {
+        self.human_feedback = Some(feedback.into());
+        self
+    }
+
+    /// Whether this outcome has been rated by a human.
+    pub fn is_rated(&self) -> bool {
+        self.human_rating.is_some()
+    }
 }
 
 /// Filter criteria for querying outcomes.
@@ -110,6 +137,10 @@ pub struct OutcomeFilter {
     pub agent_name: Option<String>,
     /// Maximum number of results.
     pub limit: Option<usize>,
+    /// Filter by human-rated status: `Some(true)` = rated only, `Some(false)` = unrated only.
+    pub rated: Option<bool>,
+    /// Filter by specific human rating value.
+    pub rating: Option<Rating>,
 }
 
 #[cfg(test)]
@@ -225,5 +256,78 @@ mod tests {
             let json2 = serde_json::to_string(&restored).unwrap();
             assert_eq!(json, json2);
         }
+    }
+
+    #[test]
+    fn outcome_record_new_has_no_rating() {
+        let record = OutcomeRecord::new(
+            OutcomeSource::ToolCall { tool_name: "shell".into() },
+            true,
+            "ok".into(),
+            100,
+            "agent".into(),
+            "goal".into(),
+        );
+        assert!(!record.is_rated());
+        assert!(record.human_rating.is_none());
+        assert!(record.human_feedback.is_none());
+    }
+
+    #[test]
+    fn outcome_record_with_rating_and_feedback() {
+        let record = OutcomeRecord::new(
+            OutcomeSource::ToolCall { tool_name: "shell".into() },
+            true,
+            "ok".into(),
+            100,
+            "agent".into(),
+            "goal".into(),
+        )
+        .with_rating(Rating::Useful)
+        .with_feedback("Great result!");
+
+        assert!(record.is_rated());
+        assert_eq!(record.human_rating, Some(Rating::Useful));
+        assert_eq!(record.human_feedback.as_deref(), Some("Great result!"));
+    }
+
+    #[test]
+    fn outcome_record_serde_with_rating() {
+        let record = OutcomeRecord::new(
+            OutcomeSource::ToolCall { tool_name: "shell".into() },
+            true,
+            "ok".into(),
+            100,
+            "agent".into(),
+            "goal".into(),
+        )
+        .with_rating(Rating::Partial)
+        .with_feedback("Needs improvement");
+
+        let json = serde_json::to_string(&record).unwrap();
+        let restored: OutcomeRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.human_rating, Some(Rating::Partial));
+        assert_eq!(restored.human_feedback.as_deref(), Some("Needs improvement"));
+    }
+
+    #[test]
+    fn outcome_record_serde_backward_compat() {
+        // Simulate a record serialized without the new fields
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000001",
+            "source": {"ToolCall": {"tool_name": "shell"}},
+            "success": true,
+            "result_summary": "ok",
+            "duration_ms": 100,
+            "agent_name": "agent",
+            "goal_context": "goal",
+            "tools_used": [],
+            "tags": [],
+            "created_at": "2025-01-01T00:00:00Z"
+        }"#;
+        let record: OutcomeRecord = serde_json::from_str(json).unwrap();
+        assert!(record.human_rating.is_none());
+        assert!(record.human_feedback.is_none());
+        assert!(!record.is_rated());
     }
 }

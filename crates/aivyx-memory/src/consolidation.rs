@@ -19,6 +19,17 @@ pub struct ConsolidationConfig {
     pub stale_days: u64,
     /// Maximum number of memories to process per consolidation run.
     pub batch_size: usize,
+    /// Multiplicative decay factor applied to knowledge triple confidences
+    /// each consolidation run (e.g., 0.95 = 5% decay per run).
+    pub triple_decay_factor: f32,
+    /// Minimum confidence below which decayed triples are pruned entirely.
+    pub triple_min_confidence: f32,
+    /// Whether to run pattern mining during consolidation.
+    pub mine_patterns: bool,
+    /// Minimum times a tool sequence must appear to be considered a pattern.
+    pub pattern_min_occurrences: u32,
+    /// Minimum success rate for a mined pattern (0.0–1.0).
+    pub pattern_min_success_rate: f32,
 }
 
 impl Default for ConsolidationConfig {
@@ -27,6 +38,11 @@ impl Default for ConsolidationConfig {
             merge_threshold: 0.85,
             stale_days: 90,
             batch_size: 200,
+            triple_decay_factor: 0.95,
+            triple_min_confidence: 0.1,
+            mine_patterns: true,
+            pattern_min_occurrences: 3,
+            pattern_min_success_rate: 0.6,
         }
     }
 }
@@ -40,6 +56,12 @@ pub struct ConsolidationReport {
     pub memories_pruned: usize,
     /// Number of high-access memories that were strengthened with a tag.
     pub memories_strengthened: usize,
+    /// Number of knowledge triples whose confidence was decayed.
+    pub triples_decayed: usize,
+    /// Number of knowledge triples pruned (confidence fell below minimum).
+    pub triples_pruned: usize,
+    /// Number of workflow patterns discovered or updated.
+    pub patterns_mined: usize,
 }
 
 /// Run memory consolidation: merge similar memories via LLM, prune stale
@@ -158,9 +180,38 @@ pub async fn consolidate(
         }
     }
 
+    // 6. Decay knowledge triple confidences
+    let (decayed, pruned) =
+        manager.decay_triples(config.triple_decay_factor, config.triple_min_confidence)?;
+    report.triples_decayed = decayed;
+    report.triples_pruned = pruned;
+
+    // 7. Mine workflow patterns from outcomes
+    if config.mine_patterns {
+        let mining_config = crate::pattern::MiningConfig {
+            min_occurrences: config.pattern_min_occurrences,
+            min_success_rate: config.pattern_min_success_rate,
+            ..Default::default()
+        };
+        match manager.mine_patterns(&mining_config) {
+            Ok(patterns) => {
+                report.patterns_mined = patterns.len();
+            }
+            Err(e) => {
+                debug!("Pattern mining failed (non-fatal): {e}");
+            }
+        }
+    }
+
     debug!(
-        "Consolidation complete: {} clusters merged, {} pruned, {} strengthened",
-        report.clusters_merged, report.memories_pruned, report.memories_strengthened,
+        "Consolidation complete: {} clusters merged, {} memories pruned, {} strengthened, \
+         {} triples decayed, {} triples pruned, {} patterns mined",
+        report.clusters_merged,
+        report.memories_pruned,
+        report.memories_strengthened,
+        report.triples_decayed,
+        report.triples_pruned,
+        report.patterns_mined,
     );
 
     Ok(report)

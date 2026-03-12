@@ -1,11 +1,12 @@
 //! Encrypted persistence layer for memories, embeddings, knowledge triples,
-//! and user profiles.
+//! workflow patterns, and user profiles.
 //!
 //! Wraps [`EncryptedStore`] with domain-specific key naming conventions:
 //! - `"mem:{MemoryId}"` — serialized [`MemoryEntry`]
 //! - `"emb:{MemoryId}"` — serialized embedding vector (`Vec<f32>`)
 //! - `"ecache:{sha256_hex}"` — embedding cache (content hash -> `Vec<f32>`)
 //! - `"triple:{TripleId}"` — serialized [`KnowledgeTriple`]
+//! - `"pattern:{PatternId}"` — serialized [`WorkflowPattern`]
 //! - `"outcome:{OutcomeId}"` — serialized [`OutcomeRecord`]
 //! - `"profile:current"` — serialized [`UserProfile`]
 //! - `"profile:v{revision}"` — versioned snapshot before overwrite
@@ -13,10 +14,11 @@
 
 use std::path::Path;
 
-use aivyx_core::{AivyxError, MemoryId, OutcomeId, Result, TripleId};
+use aivyx_core::{AivyxError, MemoryId, OutcomeId, PatternId, Result, TripleId};
 use aivyx_crypto::{EncryptedStore, MasterKey};
 
 use crate::outcome::{OutcomeFilter, OutcomeRecord};
+use crate::pattern::WorkflowPattern;
 use crate::profile::UserProfile;
 use crate::types::{KnowledgeTriple, MemoryEntry};
 
@@ -218,6 +220,155 @@ impl MemoryStore {
         Ok(ids)
     }
 
+    /// Reinforce a triple by boosting its confidence score.
+    ///
+    /// Adds `boost` to the confidence (capped at 1.0), increments the
+    /// reinforce count, and updates `reinforced_at`. Returns the updated triple.
+    pub fn reinforce_triple(
+        &self,
+        id: &TripleId,
+        boost: f32,
+        master_key: &MasterKey,
+    ) -> Result<KnowledgeTriple> {
+        let key = format!("triple:{id}");
+        let bytes = self.store.get(&key, master_key)?.ok_or_else(|| {
+            AivyxError::Other(format!("triple not found: {id}"))
+        })?;
+        let mut triple: KnowledgeTriple = serde_json::from_slice(&bytes)?;
+        triple.confidence = (triple.confidence + boost).min(1.0);
+        triple.reinforce_count += 1;
+        triple.reinforced_at = Some(chrono::Utc::now());
+        let data = serde_json::to_vec(&triple).map_err(AivyxError::Serialization)?;
+        self.store.put(&key, &data, master_key)?;
+        Ok(triple)
+    }
+
+    /// Apply multiplicative decay to all triple confidences.
+    ///
+    /// Each triple's confidence is multiplied by `factor` (e.g., 0.95 for 5%
+    /// decay). Triples that fall below `min_confidence` are deleted.
+    /// Returns `(decayed_count, pruned_count)`.
+    pub fn decay_triples(
+        &self,
+        factor: f32,
+        min_confidence: f32,
+        master_key: &MasterKey,
+    ) -> Result<(usize, usize)> {
+        let ids = self.list_triples()?;
+        let mut decayed = 0usize;
+        let mut pruned = 0usize;
+
+        for id in ids {
+            let key = format!("triple:{id}");
+            if let Some(bytes) = self.store.get(&key, master_key)? {
+                let mut triple: KnowledgeTriple = serde_json::from_slice(&bytes)?;
+                let old_confidence = triple.confidence;
+                triple.confidence *= factor;
+
+                if triple.confidence < min_confidence {
+                    self.store.delete(&key)?;
+                    pruned += 1;
+                } else if (triple.confidence - old_confidence).abs() > f32::EPSILON {
+                    let data = serde_json::to_vec(&triple).map_err(AivyxError::Serialization)?;
+                    self.store.put(&key, &data, master_key)?;
+                    decayed += 1;
+                }
+            }
+        }
+
+        Ok((decayed, pruned))
+    }
+
+    /// Find an existing triple by subject+predicate+object (exact match).
+    ///
+    /// Used for deduplication — returns the first matching triple ID if found.
+    pub fn find_triple(
+        &self,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        master_key: &MasterKey,
+    ) -> Result<Option<TripleId>> {
+        let ids = self.list_triples()?;
+        for id in ids {
+            if let Some(triple) = self.load_triple(&id, master_key)? {
+                if triple.subject == subject
+                    && triple.predicate == predicate
+                    && triple.object == object
+                {
+                    return Ok(Some(id));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    // -----------------------------------------------------------------------
+    // Workflow patterns
+    // -----------------------------------------------------------------------
+
+    /// Save a workflow pattern.
+    pub fn save_pattern(
+        &self,
+        pattern: &WorkflowPattern,
+        master_key: &MasterKey,
+    ) -> Result<()> {
+        let key = format!("pattern:{}", pattern.id);
+        let data = serde_json::to_vec(pattern).map_err(AivyxError::Serialization)?;
+        self.store.put(&key, &data, master_key)
+    }
+
+    /// Load a workflow pattern by ID.
+    pub fn load_pattern(
+        &self,
+        id: &PatternId,
+        master_key: &MasterKey,
+    ) -> Result<Option<WorkflowPattern>> {
+        let key = format!("pattern:{id}");
+        match self.store.get(&key, master_key)? {
+            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// List all stored pattern IDs.
+    pub fn list_patterns(&self) -> Result<Vec<PatternId>> {
+        let keys = self.store.list_keys()?;
+        let mut ids = Vec::new();
+        for key in keys {
+            if let Some(id_str) = key.strip_prefix("pattern:")
+                && let Ok(id) = id_str.parse::<PatternId>()
+            {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
+    }
+
+    /// Delete a pattern.
+    pub fn delete_pattern(&self, id: &PatternId) -> Result<()> {
+        let key = format!("pattern:{id}");
+        self.store.delete(&key)
+    }
+
+    /// Find a pattern by its sequence key (e.g., `"shell→file_read→shell"`).
+    pub fn find_pattern_by_key(
+        &self,
+        sequence_key: &str,
+        master_key: &MasterKey,
+    ) -> Result<Option<PatternId>> {
+        for id in self.list_patterns()? {
+            let key = format!("pattern:{id}");
+            if let Some(bytes) = self.store.get(&key, master_key)? {
+                let pattern: WorkflowPattern = serde_json::from_slice(&bytes)?;
+                if pattern.sequence_key == sequence_key {
+                    return Ok(Some(id));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     // -----------------------------------------------------------------------
     // Outcome records
     // -----------------------------------------------------------------------
@@ -265,6 +416,27 @@ impl MemoryStore {
         Ok(ids)
     }
 
+    /// Rate an outcome by ID. Reads the outcome, sets the rating and optional
+    /// feedback text, then writes it back. Returns the updated record.
+    pub fn rate_outcome(
+        &self,
+        id: &OutcomeId,
+        rating: crate::notification::Rating,
+        feedback: Option<String>,
+        master_key: &MasterKey,
+    ) -> Result<OutcomeRecord> {
+        let key = format!("outcome:{id}");
+        let bytes = self.store.get(&key, master_key)?.ok_or_else(|| {
+            AivyxError::Other(format!("outcome not found: {id}"))
+        })?;
+        let mut record: OutcomeRecord = serde_json::from_slice(&bytes)?;
+        record.human_rating = Some(rating);
+        record.human_feedback = feedback;
+        let data = serde_json::to_vec(&record).map_err(AivyxError::Serialization)?;
+        self.store.put(&key, &data, master_key)?;
+        Ok(record)
+    }
+
     /// Query outcomes with optional filters.
     ///
     /// Loads all outcomes and applies the filter criteria: source type name,
@@ -304,6 +476,23 @@ impl MemoryStore {
                 // Agent name filter
                 if let Some(ref agent_name) = filter.agent_name
                     && record.agent_name != *agent_name
+                {
+                    continue;
+                }
+
+                // Rated filter
+                if let Some(rated) = filter.rated {
+                    if rated && record.human_rating.is_none() {
+                        continue;
+                    }
+                    if !rated && record.human_rating.is_some() {
+                        continue;
+                    }
+                }
+
+                // Specific rating filter
+                if let Some(ref rating) = filter.rating
+                    && record.human_rating.as_ref() != Some(rating)
                 {
                     continue;
                 }

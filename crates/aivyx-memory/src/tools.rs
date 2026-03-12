@@ -309,17 +309,18 @@ impl Tool for MemoryTripleTool {
                     .to_string();
                 let confidence = input["confidence"].as_f64().unwrap_or(0.9) as f32;
 
-                let id = mgr.add_triple(
+                let (id, created) = mgr.add_or_reinforce_triple(
                     subject,
                     predicate,
                     object,
                     Some(self.agent_id),
                     confidence,
                     "agent".into(),
+                    0.1, // reinforce boost for explicit agent assertion
                 )?;
 
                 Ok(serde_json::json!({
-                    "status": "added",
+                    "status": if created { "added" } else { "reinforced" },
                     "triple_id": id.to_string(),
                 }))
             }

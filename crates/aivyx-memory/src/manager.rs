@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use tracing::debug;
 
-use aivyx_core::{AgentId, MemoryId, OutcomeId, Result, TripleId};
+use aivyx_core::{AgentId, MemoryId, OutcomeId, PatternId, Result, TripleId};
 use aivyx_crypto::MasterKey;
 use aivyx_llm::EmbeddingProvider;
 
@@ -247,6 +247,71 @@ impl MemoryManager {
     }
 
     // -----------------------------------------------------------------------
+    // Triple confidence evolution
+    // -----------------------------------------------------------------------
+
+    /// Reinforce a triple's confidence by the given boost (clamped to 1.0).
+    ///
+    /// Also updates the in-memory knowledge graph so queries reflect the new
+    /// confidence immediately.
+    pub fn reinforce_triple(&mut self, id: &TripleId, boost: f32) -> Result<KnowledgeTriple> {
+        let triple = self.store.reinforce_triple(id, boost, &self.master_key)?;
+        if let Some(ref mut graph) = self.graph {
+            graph.upsert_triple(&triple);
+        }
+        debug!(
+            "Reinforced triple {id}: confidence={:.2}, count={}",
+            triple.confidence, triple.reinforce_count
+        );
+        Ok(triple)
+    }
+
+    /// Add a new triple, or reinforce an existing one if a triple with the
+    /// same subject-predicate-object already exists.
+    ///
+    /// Returns the triple ID and whether it was newly created.
+    pub fn add_or_reinforce_triple(
+        &mut self,
+        subject: String,
+        predicate: String,
+        object: String,
+        agent_scope: Option<AgentId>,
+        confidence: f32,
+        source: String,
+        reinforce_boost: f32,
+    ) -> Result<(TripleId, bool)> {
+        if let Some(existing_id) =
+            self.store
+                .find_triple(&subject, &predicate, &object, &self.master_key)?
+        {
+            self.reinforce_triple(&existing_id, reinforce_boost)?;
+            Ok((existing_id, false))
+        } else {
+            let id = self.add_triple(subject, predicate, object, agent_scope, confidence, source)?;
+            Ok((id, true))
+        }
+    }
+
+    /// Apply multiplicative decay to all triple confidences and prune those
+    /// below the minimum threshold.
+    ///
+    /// Rebuilds the in-memory knowledge graph when any triples are pruned.
+    pub fn decay_triples(&mut self, factor: f32, min_confidence: f32) -> Result<(usize, usize)> {
+        let (decayed, pruned) =
+            self.store
+                .decay_triples(factor, min_confidence, &self.master_key)?;
+        if pruned > 0 {
+            // Rebuild graph to drop pruned triples
+            self.graph = Some(KnowledgeGraph::build(&self.store, &self.master_key)?);
+        } else if decayed > 0 {
+            // Confidence values changed — rebuild so graph edges are accurate
+            self.graph = Some(KnowledgeGraph::build(&self.store, &self.master_key)?);
+        }
+        debug!("Triple decay: {decayed} decayed, {pruned} pruned (factor={factor}, min={min_confidence})");
+        Ok((decayed, pruned))
+    }
+
+    // -----------------------------------------------------------------------
     // Outcome tracking
     // -----------------------------------------------------------------------
 
@@ -263,6 +328,132 @@ impl MemoryManager {
     /// Query outcomes matching the given filter criteria.
     pub fn query_outcomes(&self, filter: &OutcomeFilter) -> Result<Vec<OutcomeRecord>> {
         self.store.query_outcomes(filter, &self.master_key)
+    }
+
+    /// Rate an outcome by ID with an optional feedback comment.
+    ///
+    /// Updates the outcome in-place and returns the modified record. The rating
+    /// feeds into [`LearnedWeights`] so human feedback influences future
+    /// specialist selection.
+    pub fn rate_outcome(
+        &self,
+        id: &OutcomeId,
+        rating: crate::notification::Rating,
+        feedback: Option<String>,
+    ) -> Result<OutcomeRecord> {
+        let record = self.store.rate_outcome(id, rating, feedback, &self.master_key)?;
+        debug!(
+            "Rated outcome {} as {:?}{}",
+            id,
+            record.human_rating,
+            record.human_feedback.as_ref().map(|f| format!(" — {f}")).unwrap_or_default()
+        );
+        Ok(record)
+    }
+
+    /// Load a single outcome by ID.
+    pub fn get_outcome(&self, id: &OutcomeId) -> Result<Option<OutcomeRecord>> {
+        self.store.load_outcome(id, &self.master_key)
+    }
+
+    // -----------------------------------------------------------------------
+    // Workflow pattern mining
+    // -----------------------------------------------------------------------
+
+    /// Mine workflow patterns from stored outcomes.
+    ///
+    /// Loads all outcomes, runs the pattern miner, and persists discovered
+    /// patterns. Existing patterns with the same sequence key are updated
+    /// rather than duplicated.
+    pub fn mine_patterns(
+        &self,
+        config: &crate::pattern::MiningConfig,
+    ) -> Result<Vec<crate::pattern::WorkflowPattern>> {
+        let outcomes = self.query_outcomes(&OutcomeFilter {
+            limit: Some(1000),
+            ..Default::default()
+        })?;
+
+        let discovered = crate::pattern::mine_patterns(&outcomes, config);
+
+        let mut stored = Vec::new();
+        for mut pattern in discovered {
+            // Check for existing pattern with same sequence key
+            if let Some(existing_id) = self
+                .store
+                .find_pattern_by_key(&pattern.sequence_key, &self.master_key)?
+            {
+                // Update existing pattern's stats
+                if let Some(mut existing) =
+                    self.store.load_pattern(&existing_id, &self.master_key)?
+                {
+                    existing.success_rate = pattern.success_rate;
+                    existing.occurrence_count = pattern.occurrence_count;
+                    existing.success_count = pattern.success_count;
+                    existing.avg_duration_ms = pattern.avg_duration_ms;
+                    existing.goal_keywords = pattern.goal_keywords;
+                    existing.agent_roles = pattern.agent_roles;
+                    existing.updated_at = chrono::Utc::now();
+                    self.store.save_pattern(&existing, &self.master_key)?;
+                    stored.push(existing);
+                    continue;
+                }
+            }
+            // New pattern — assign fresh ID and save
+            pattern.id = PatternId::new();
+            self.store.save_pattern(&pattern, &self.master_key)?;
+            stored.push(pattern);
+        }
+
+        debug!("Pattern mining: {} patterns stored/updated", stored.len());
+        Ok(stored)
+    }
+
+    /// Query stored workflow patterns with optional filters.
+    pub fn query_patterns(
+        &self,
+        filter: &crate::pattern::PatternFilter,
+    ) -> Result<Vec<crate::pattern::WorkflowPattern>> {
+        let ids = self.store.list_patterns()?;
+        let mut results = Vec::new();
+
+        for id in ids {
+            if let Some(pattern) = self.store.load_pattern(&id, &self.master_key)? {
+                if let Some(ref tool) = filter.contains_tool {
+                    if !pattern.tool_sequence.contains(tool) {
+                        continue;
+                    }
+                }
+                if let Some(min_rate) = filter.min_success_rate {
+                    if pattern.success_rate < min_rate {
+                        continue;
+                    }
+                }
+                if let Some(min_occ) = filter.min_occurrences {
+                    if pattern.occurrence_count < min_occ {
+                        continue;
+                    }
+                }
+                results.push(pattern);
+            }
+        }
+
+        // Sort by occurrence count descending
+        results.sort_by(|a, b| b.occurrence_count.cmp(&a.occurrence_count));
+
+        if let Some(limit) = filter.limit {
+            results.truncate(limit);
+        }
+
+        Ok(results)
+    }
+
+    /// Load a single pattern by ID.
+    pub fn get_pattern(
+        &self,
+        id: &PatternId,
+    ) -> Result<Option<crate::pattern::WorkflowPattern>> {
+        self.store.load_pattern(id, &self.master_key)
     }
 
     // -----------------------------------------------------------------------
