@@ -19,6 +19,9 @@ pub struct AgentSession {
     dirs: AivyxDirs,
     config: AivyxConfig,
     master_key: MasterKey,
+    /// Shared Nexus store for agent social tools (None if Nexus is not initialized).
+    #[cfg(feature = "nexus")]
+    nexus_store: Option<std::sync::Arc<aivyx_nexus::store::NexusStore>>,
 }
 
 impl AgentSession {
@@ -28,7 +31,18 @@ impl AgentSession {
             dirs,
             config,
             master_key,
+            #[cfg(feature = "nexus")]
+            nexus_store: None,
         }
+    }
+
+    /// Set the Nexus store for agent social tools.
+    ///
+    /// When set, all agents created by this session will have Nexus tools
+    /// (publish, browse, interact, etc.) registered in their tool registry.
+    #[cfg(feature = "nexus")]
+    pub fn set_nexus_store(&mut self, store: std::sync::Arc<aivyx_nexus::store::NexusStore>) {
+        self.nexus_store = Some(store);
     }
 
     /// Access the file system directories.
@@ -257,6 +271,35 @@ impl AgentSession {
                 self.config.smtp.clone(),
                 tool_key,
             )));
+        }
+
+        // Nexus social tools — register if store is available and profile allows it.
+        #[cfg(feature = "nexus")]
+        if profile.nexus_enabled
+            && let Some(ref nexus_store) = self.nexus_store
+        {
+            let instance_id = self
+                .config
+                .federation
+                .as_ref()
+                .map(|f| f.instance_id.clone())
+                .unwrap_or_else(|| "local".to_string());
+
+            let nexus_ctx = std::sync::Arc::new(crate::nexus_tools::NexusContext {
+                store: std::sync::Arc::clone(nexus_store),
+                redaction: std::sync::Arc::new(aivyx_nexus::redact::RedactionFilter::new()),
+                agent_id: aivyx_nexus::types::AgentProfile::canonical_id(
+                    &profile.name,
+                    &instance_id,
+                ),
+                instance_id,
+            });
+
+            crate::nexus_tools::register_nexus_tools(agent.tool_registry_mut(), nexus_ctx);
+            tracing::info!(
+                "Nexus enabled for agent '{}' (7 social tools registered)",
+                profile.name,
+            );
         }
 
         Ok(agent)

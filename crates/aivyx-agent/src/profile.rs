@@ -44,6 +44,13 @@ pub struct AgentProfile {
     /// generates the system prompt from this instead of using the raw `soul` field.
     #[serde(default)]
     pub persona: Option<Persona>,
+    /// Whether this agent can participate in the Nexus social network.
+    ///
+    /// Defaults to `true`. Set to `false` to prevent this agent from having
+    /// Nexus tools (publish, browse, interact, etc.) even when the instance-level
+    /// Nexus config is enabled. Useful for agents handling sensitive topics.
+    #[serde(default = "default_nexus_enabled")]
+    pub nexus_enabled: bool,
 }
 
 /// A capability entry in an agent profile.
@@ -57,6 +64,10 @@ pub struct ProfileCapability {
 
 fn default_max_tokens() -> u32 {
     4096
+}
+
+fn default_nexus_enabled() -> bool {
+    true
 }
 
 impl AgentProfile {
@@ -112,6 +123,7 @@ impl AgentProfile {
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
             persona: None,
+            nexus_enabled: true,
         }
     }
 
@@ -200,6 +212,7 @@ impl AgentProfile {
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
             persona: Some(persona),
+            nexus_enabled: true,
         }
     }
 
@@ -242,6 +255,7 @@ impl AgentProfile {
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
             persona: Some(persona),
+            nexus_enabled: true,
         }
     }
 
@@ -277,6 +291,7 @@ impl AgentProfile {
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
             persona: Some(persona),
+            nexus_enabled: true,
         }
     }
 
@@ -316,6 +331,7 @@ impl AgentProfile {
             ],
             mcp_servers: Vec::new(),
             persona: Some(persona),
+            nexus_enabled: true,
         }
     }
 
@@ -355,6 +371,7 @@ impl AgentProfile {
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
             persona: Some(persona),
+            nexus_enabled: true,
         }
     }
 }

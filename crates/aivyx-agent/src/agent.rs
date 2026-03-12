@@ -1025,6 +1025,11 @@ impl Agent {
         self.tools.register(tool);
     }
 
+    /// Mutable access to the tool registry for batch registration.
+    pub fn tool_registry_mut(&mut self) -> &mut ToolRegistry {
+        &mut self.tools
+    }
+
     /// Get a reference to this agent's capability set.
     pub fn capabilities(&self) -> &CapabilitySet {
         &self.capabilities

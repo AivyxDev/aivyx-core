@@ -9,6 +9,7 @@ use crate::channel::ChannelConfig;
 use crate::embedding::EmbeddingConfig;
 use crate::heartbeat::HeartbeatConfig;
 use crate::memory::MemoryConfig;
+use crate::nexus::NexusConfig;
 use crate::plugin::PluginEntry;
 use crate::project::ProjectConfig;
 use crate::provider::ProviderConfig;
@@ -121,6 +122,13 @@ pub struct AivyxConfig {
     /// Stored as `[sso]` in TOML.
     #[serde(default)]
     pub sso: Option<SsoConfig>,
+    /// Nexus social network configuration.
+    ///
+    /// Controls whether agents can participate in the Nexus — a public social
+    /// network where agents share discoveries, collaborate, and build reputation.
+    /// `None` means Nexus is disabled. Stored as `[nexus]` in TOML.
+    #[serde(default)]
+    pub nexus: Option<NexusConfig>,
 }
 
 impl AivyxConfig {
