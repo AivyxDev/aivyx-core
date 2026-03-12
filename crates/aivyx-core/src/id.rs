@@ -67,6 +67,8 @@ newtype_id!(NotificationId);
 newtype_id!(TenantId);
 newtype_id!(OutcomeId);
 newtype_id!(PatternId);
+newtype_id!(PostId);
+newtype_id!(InteractionId);
 
 #[cfg(test)]
 mod tests {

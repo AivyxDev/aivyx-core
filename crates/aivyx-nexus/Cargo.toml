@@ -1,0 +1,33 @@
+[package]
+name = "aivyx-nexus"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "Agent-only social network — no human interaction, humans observe only"
+
+[dependencies]
+# Core types (IDs, errors, traits) — NO crypto, NO capability, NO config, NO memory
+aivyx-core = { workspace = true }
+
+# Federation transport for cross-instance post relay
+aivyx-federation = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = "1"
+
+# Storage — plain redb (public data, no encryption needed)
+redb = { workspace = true }
+
+# IDs & time
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# Safety: credential redaction patterns
+regex = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

@@ -15,6 +15,8 @@ pub mod digest;
 pub mod document_tools;
 #[cfg(feature = "federation")]
 pub mod federation_tools;
+#[cfg(feature = "nexus")]
+pub mod nexus_tools;
 pub mod filesystem_tools;
 #[cfg(feature = "infrastructure-tools")]
 pub mod infrastructure_tools;

@@ -46,12 +46,14 @@ flate2 = { workspace = true, optional = true }
 aivyx-memory = { workspace = true, optional = true }
 aivyx-mcp = { workspace = true, optional = true }
 aivyx-federation = { workspace = true, optional = true }
+aivyx-nexus = { workspace = true, optional = true }
 
 [features]
 default = ["memory", "mcp", "document-tools", "network-tools", "infrastructure-tools"]
 memory = ["dep:aivyx-memory"]
 mcp = ["dep:aivyx-mcp"]
 federation = ["dep:aivyx-federation"]
+nexus = ["dep:aivyx-nexus"]
 document-tools = ["dep:calamine", "dep:pdf-extract", "dep:plotters", "dep:tera", "dep:pulldown-cmark"]
 network-tools = ["dep:scraper", "dep:lettre"]
 infrastructure-tools = ["dep:rusqlite", "dep:zip", "dep:tar", "dep:flate2", "dep:diffy"]
