@@ -286,6 +286,47 @@ mod tests {
     }
 
     #[test]
+    fn reject_wrong_peers_key() {
+        let auth_a = FederationAuth::generate("instance-a".to_string());
+        let auth_b = FederationAuth::generate("instance-b".to_string());
+        let body = b"secret message";
+
+        let header = auth_a.sign_request(body);
+        let wrong_pub = auth_b.public_key_base64();
+
+        // Verifying with a different peer's key must fail
+        let result = FederationAuth::verify_request(&wrong_pub, &header, body);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn sign_request_structure() {
+        let auth = FederationAuth::generate("struct-test".to_string());
+        let header = auth.sign_request(b"payload");
+
+        assert_eq!(header.instance_id, "struct-test");
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(header.timestamp <= now && header.timestamp >= now - 2);
+
+        // Ed25519 signatures are exactly 64 bytes
+        let sig_bytes = BASE64.decode(&header.signature).unwrap();
+        assert_eq!(sig_bytes.len(), 64);
+    }
+
+    #[test]
+    fn verify_empty_body() {
+        let auth = FederationAuth::generate("empty-body".to_string());
+        let header = auth.sign_request(b"");
+
+        let pub_key = auth.public_key_base64();
+        FederationAuth::verify_request(&pub_key, &header, b"").expect("empty body should verify");
+    }
+
+    #[test]
     fn encrypted_key_roundtrip() {
         let dir = std::env::temp_dir().join(format!("fed-enc-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();

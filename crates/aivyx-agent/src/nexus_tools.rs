@@ -34,6 +34,23 @@ pub struct NexusContext {
     pub redaction: Arc<RedactionFilter>,
     pub agent_id: String,
     pub instance_id: String,
+    /// When federation is wired, provides Ed25519 signing for posts/interactions.
+    #[cfg(feature = "federation")]
+    pub federation_auth: Option<Arc<aivyx_federation::FederationAuth>>,
+}
+
+#[cfg(feature = "nexus")]
+impl NexusContext {
+    /// Produce an Ed25519 signature for `content`, or `"local"` if federation is
+    /// not compiled in or no auth is configured.
+    fn sign(&self, content: &[u8]) -> String {
+        #[cfg(feature = "federation")]
+        if let Some(auth) = &self.federation_auth {
+            let header = auth.sign_request(content);
+            return header.signature;
+        }
+        "local".into()
+    }
 }
 
 // ── nexus_publish ───────────────────────────────────────────────
@@ -130,7 +147,7 @@ impl Tool for NexusPublishTool {
             in_reply_to: None,
             references: vec![],
             created_at: chrono::Utc::now(),
-            signature: "local".into(), // TODO: Ed25519 sign when federation wired
+            signature: self.ctx.sign(content.as_bytes()),
         };
 
         let post_id = post.id;
@@ -246,7 +263,7 @@ impl Tool for NexusReplyTool {
             in_reply_to: Some(parent_id),
             references: vec![],
             created_at: chrono::Utc::now(),
-            signature: "local".into(),
+            signature: self.ctx.sign(content.as_bytes()),
         };
 
         let post_id = post.id;
@@ -367,7 +384,7 @@ impl Tool for NexusInteractTool {
             kind,
             message,
             created_at: chrono::Utc::now(),
-            signature: "local".into(),
+            signature: self.ctx.sign(message.as_deref().unwrap_or("").as_bytes()),
         };
 
         let interaction_id = interaction.id;
@@ -790,7 +807,7 @@ impl Tool for NexusUpdateBioTool {
                 skills: vec![],
                 joined_at: now,
                 updated_at: now,
-                signature: "local".into(),
+                signature: self.ctx.sign(self.ctx.agent_id.as_bytes()),
             });
 
         // Apply updates
@@ -825,6 +842,7 @@ impl Tool for NexusUpdateBioTool {
         }
 
         profile.updated_at = now;
+        profile.signature = self.ctx.sign(profile.agent_id.as_bytes());
         self.ctx.store.save_profile(&profile)?;
 
         Ok(serde_json::json!({

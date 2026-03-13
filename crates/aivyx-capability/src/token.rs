@@ -337,6 +337,31 @@ mod tests {
     }
 
     #[test]
+    fn attenuate_adds_expiry_to_no_expiry_parent() {
+        // Parent has no expiry — child can freely add one (narrowing, not broadening).
+        let cap = make_cap(
+            CapabilityScope::Filesystem {
+                root: PathBuf::from("/home"),
+            },
+            "*",
+            None,
+        );
+        let child_exp = Utc::now() + Duration::hours(1);
+        let child = cap.attenuate(
+            CapabilityScope::Filesystem {
+                root: PathBuf::from("/home"),
+            },
+            ActionPattern::new("*").unwrap(),
+            vec![Principal::User("alice".into())],
+            Some(child_exp),
+        );
+        assert!(child.is_some());
+        let child = child.unwrap();
+        assert_eq!(child.expires_at, Some(child_exp));
+        assert_eq!(child.parent_id, Some(cap.id));
+    }
+
+    #[test]
     fn check_agent_principal() {
         let agent_id = AgentId::new();
         let mut cap = make_cap(CapabilityScope::Calendar, "*", None);

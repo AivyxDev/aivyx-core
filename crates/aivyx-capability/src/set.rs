@@ -261,6 +261,32 @@ mod tests {
     }
 
     #[test]
+    fn intersect_both_empty() {
+        let a = CapabilitySet::new();
+        let b = CapabilitySet::new();
+        let inter = a.intersect(&b);
+        assert!(inter.is_empty());
+    }
+
+    #[test]
+    fn revoke_nonexistent_id_is_noop() {
+        let mut set = CapabilitySet::new();
+        set.grant(fs_cap("/home", "*", "alice"));
+        let phantom_id = CapabilityId::new();
+        set.revoke(phantom_id);
+
+        // The original capability should remain valid
+        let result = set.check(
+            &Principal::User("alice".into()),
+            &CapabilityScope::Filesystem {
+                root: PathBuf::from("/home"),
+            },
+            "read:file",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn multiple_caps_first_match_returned() {
         let mut set = CapabilitySet::new();
         let cap1 = fs_cap("/home", "read:*", "alice");

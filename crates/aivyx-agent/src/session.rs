@@ -22,6 +22,9 @@ pub struct AgentSession {
     /// Shared Nexus store for agent social tools (None if Nexus is not initialized).
     #[cfg(feature = "nexus")]
     nexus_store: Option<std::sync::Arc<aivyx_nexus::store::NexusStore>>,
+    /// Federation authentication for Ed25519 signing of Nexus content.
+    #[cfg(feature = "federation")]
+    federation_auth: Option<std::sync::Arc<aivyx_federation::FederationAuth>>,
 }
 
 impl AgentSession {
@@ -33,6 +36,8 @@ impl AgentSession {
             master_key,
             #[cfg(feature = "nexus")]
             nexus_store: None,
+            #[cfg(feature = "federation")]
+            federation_auth: None,
         }
     }
 
@@ -43,6 +48,12 @@ impl AgentSession {
     #[cfg(feature = "nexus")]
     pub fn set_nexus_store(&mut self, store: std::sync::Arc<aivyx_nexus::store::NexusStore>) {
         self.nexus_store = Some(store);
+    }
+
+    /// Set the federation auth for Ed25519 signing of Nexus content.
+    #[cfg(feature = "federation")]
+    pub fn set_federation_auth(&mut self, auth: std::sync::Arc<aivyx_federation::FederationAuth>) {
+        self.federation_auth = Some(auth);
     }
 
     /// Access the file system directories.
@@ -293,6 +304,8 @@ impl AgentSession {
                     &instance_id,
                 ),
                 instance_id,
+                #[cfg(feature = "federation")]
+                federation_auth: self.federation_auth.clone(),
             });
 
             crate::nexus_tools::register_nexus_tools(agent.tool_registry_mut(), nexus_ctx);
