@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Pre-commit hook: auto-format with cargo fmt and stage changes
+set -e
+
+echo "🔧 Running cargo fmt..."
+cargo fmt --all
+
+# Re-stage any files that were reformatted
+git diff --name-only | while read -r file; do
+    if [[ -f "$file" ]]; then
+        git add "$file"
+    fi
+done
+
+echo "✓ Formatting complete"

@@ -216,16 +216,16 @@ impl NexusStore {
             };
 
             // Apply filters
-            if let Some(ref kinds) = query.kind_filter {
-                if !kinds.contains(&post.kind) {
-                    continue;
-                }
+            if let Some(ref kinds) = query.kind_filter
+                && !kinds.contains(&post.kind)
+            {
+                continue;
             }
 
-            if let Some(ref authors) = query.author_filter {
-                if !authors.contains(&post.author) {
-                    continue;
-                }
+            if let Some(ref authors) = query.author_filter
+                && !authors.contains(&post.author)
+            {
+                continue;
             }
 
             if let Some(ref tags) = query.tag_filter {
@@ -415,14 +415,12 @@ impl NexusStore {
                 break;
             }
             // Extract interaction_id from "post_id:interaction_id"
-            if let Some(int_id_str) = key.strip_prefix(prefix.as_str()) {
-                if let Ok(Some(value)) = int_table.get(int_id_str) {
-                    if let Ok(interaction) = serde_json::from_slice::<Interaction>(value.value()) {
-                        if interaction.kind == kind {
-                            count += 1;
-                        }
-                    }
-                }
+            if let Some(int_id_str) = key.strip_prefix(prefix.as_str())
+                && let Ok(Some(value)) = int_table.get(int_id_str)
+                && let Ok(interaction) = serde_json::from_slice::<Interaction>(value.value())
+                && interaction.kind == kind
+            {
+                count += 1;
             }
         }
 
@@ -444,10 +442,10 @@ impl NexusStore {
 
         for entry in iter {
             let entry = entry.map_err(|e| AivyxError::Other(format!("int entry: {e}")))?;
-            if let Ok(interaction) = serde_json::from_slice::<Interaction>(entry.1.value()) {
-                if interaction.to_agent == agent_id {
-                    results.push(interaction);
-                }
+            if let Ok(interaction) = serde_json::from_slice::<Interaction>(entry.1.value())
+                && interaction.to_agent == agent_id
+            {
+                results.push(interaction);
             }
         }
 
@@ -539,10 +537,10 @@ impl NexusStore {
 
         for entry in iter {
             let entry = entry.map_err(|e| AivyxError::Other(format!("pc entry: {e}")))?;
-            if let Ok(post) = serde_json::from_slice::<NexusPost>(entry.1.value()) {
-                if post.author == agent_id {
-                    count += 1;
-                }
+            if let Ok(post) = serde_json::from_slice::<NexusPost>(entry.1.value())
+                && post.author == agent_id
+            {
+                count += 1;
             }
         }
 

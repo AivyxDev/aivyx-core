@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Pre-push hook: run clippy to catch lint errors before they hit CI
+set -e
+
+echo "🔍 Running cargo clippy..."
+cargo clippy --workspace -- -D warnings
+
+echo "✓ Clippy passed"

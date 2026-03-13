@@ -270,6 +270,7 @@ impl MemoryManager {
     /// same subject-predicate-object already exists.
     ///
     /// Returns the triple ID and whether it was newly created.
+    #[allow(clippy::too_many_arguments)]
     pub fn add_or_reinforce_triple(
         &mut self,
         subject: String,
@@ -428,20 +429,20 @@ impl MemoryManager {
 
         for id in ids {
             if let Some(pattern) = self.store.load_pattern(&id, &self.master_key)? {
-                if let Some(ref tool) = filter.contains_tool {
-                    if !pattern.tool_sequence.contains(tool) {
-                        continue;
-                    }
+                if let Some(ref tool) = filter.contains_tool
+                    && !pattern.tool_sequence.contains(tool)
+                {
+                    continue;
                 }
-                if let Some(min_rate) = filter.min_success_rate {
-                    if pattern.success_rate < min_rate {
-                        continue;
-                    }
+                if let Some(min_rate) = filter.min_success_rate
+                    && pattern.success_rate < min_rate
+                {
+                    continue;
                 }
-                if let Some(min_occ) = filter.min_occurrences {
-                    if pattern.occurrence_count < min_occ {
-                        continue;
-                    }
+                if let Some(min_occ) = filter.min_occurrences
+                    && pattern.occurrence_count < min_occ
+                {
+                    continue;
                 }
                 results.push(pattern);
             }

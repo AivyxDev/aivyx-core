@@ -292,13 +292,12 @@ impl MemoryStore {
     ) -> Result<Option<TripleId>> {
         let ids = self.list_triples()?;
         for id in ids {
-            if let Some(triple) = self.load_triple(&id, master_key)? {
-                if triple.subject == subject
-                    && triple.predicate == predicate
-                    && triple.object == object
-                {
-                    return Ok(Some(id));
-                }
+            if let Some(triple) = self.load_triple(&id, master_key)?
+                && triple.subject == subject
+                && triple.predicate == predicate
+                && triple.object == object
+            {
+                return Ok(Some(id));
             }
         }
         Ok(None)

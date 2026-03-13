@@ -130,7 +130,7 @@ pub fn mine_patterns(outcomes: &[OutcomeRecord], config: &MiningConfig) -> Vec<W
                     .join("→");
 
                 let stats = ngram_map.entry(key).or_insert_with(|| NgramStats {
-                    tools: window.iter().cloned().collect(),
+                    tools: window.to_vec(),
                     total: 0,
                     successes: 0,
                     total_duration_ms: 0,
