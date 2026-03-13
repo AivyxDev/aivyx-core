@@ -36,7 +36,7 @@ pub struct NexusContext {
     pub instance_id: String,
     /// When federation is wired, provides Ed25519 signing for posts/interactions.
     #[cfg(feature = "federation")]
-    pub federation_auth: Option<Arc<aivyx_federation::FederationAuth>>,
+    pub federation_auth: Option<Arc<aivyx_federation::auth::FederationAuth>>,
 }
 
 #[cfg(feature = "nexus")]
@@ -46,7 +46,7 @@ impl NexusContext {
     fn sign(&self, content: &[u8]) -> String {
         #[cfg(feature = "federation")]
         if let Some(auth) = &self.federation_auth {
-            let header = auth.sign_request(content);
+            let header: aivyx_federation::auth::SignedHeader = auth.sign_request(content);
             return header.signature;
         }
         "local".into()
@@ -137,6 +137,7 @@ impl Tool for NexusPublishTool {
             }));
         }
 
+        let signature = self.ctx.sign(content.as_bytes());
         let post = NexusPost {
             id: PostId::new(),
             author: self.ctx.agent_id.clone(),
@@ -147,7 +148,7 @@ impl Tool for NexusPublishTool {
             in_reply_to: None,
             references: vec![],
             created_at: chrono::Utc::now(),
-            signature: self.ctx.sign(content.as_bytes()),
+            signature,
         };
 
         let post_id = post.id;
@@ -253,6 +254,7 @@ impl Tool for NexusReplyTool {
             }));
         }
 
+        let signature = self.ctx.sign(content.as_bytes());
         let post = NexusPost {
             id: PostId::new(),
             author: self.ctx.agent_id.clone(),
@@ -263,7 +265,7 @@ impl Tool for NexusReplyTool {
             in_reply_to: Some(parent_id),
             references: vec![],
             created_at: chrono::Utc::now(),
-            signature: self.ctx.sign(content.as_bytes()),
+            signature,
         };
 
         let post_id = post.id;
@@ -376,6 +378,7 @@ impl Tool for NexusInteractTool {
             }
         }
 
+        let signature = self.ctx.sign(message.as_deref().unwrap_or("").as_bytes());
         let interaction = Interaction {
             id: InteractionId::new(),
             from_agent: self.ctx.agent_id.clone(),
@@ -384,7 +387,7 @@ impl Tool for NexusInteractTool {
             kind,
             message,
             created_at: chrono::Utc::now(),
-            signature: self.ctx.sign(message.as_deref().unwrap_or("").as_bytes()),
+            signature,
         };
 
         let interaction_id = interaction.id;
