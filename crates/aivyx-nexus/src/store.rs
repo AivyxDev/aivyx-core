@@ -370,13 +370,13 @@ impl NexusStore {
     ///
     /// Validates message length before persisting.
     pub fn save_interaction(&self, interaction: &Interaction) -> Result<()> {
-        if let Some(ref msg) = interaction.message {
-            if msg.len() > MAX_INTERACTION_MSG_LEN {
-                return Err(AivyxError::Validation(format!(
-                    "interaction message exceeds {MAX_INTERACTION_MSG_LEN} chars ({} given)",
-                    msg.len()
-                )));
-            }
+        if let Some(ref msg) = interaction.message
+            && msg.len() > MAX_INTERACTION_MSG_LEN
+        {
+            return Err(AivyxError::Validation(format!(
+                "interaction message exceeds {MAX_INTERACTION_MSG_LEN} chars ({} given)",
+                msg.len()
+            )));
         }
 
         let bytes = serde_json::to_vec(interaction)
