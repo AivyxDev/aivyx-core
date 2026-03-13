@@ -2,7 +2,7 @@
 
 **Shared foundation crates for the [Aivyx](https://aivyx-studio.com) ecosystem** — a privacy-first, locally-hosted AI agent platform that encrypts everything at rest, enforces capability-based permissions, and maintains tamper-proof audit trails.
 
-> **Version**: 0.1.0 · **License**: MIT · **Rust Edition**: 2024
+> **Version**: 0.3.3 · **License**: MIT · **Rust Edition**: 2024
 >
 > For technical architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 > For feature details, see [FEATURES.md](FEATURES.md).
