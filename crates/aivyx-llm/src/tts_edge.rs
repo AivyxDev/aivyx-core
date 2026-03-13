@@ -71,13 +71,25 @@ impl TtsProvider for EdgeTtsProvider {
             cmd.arg("--rate").arg(rate_str);
         }
 
-        let output = cmd.output().await.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                AivyxError::Config("edge-tts not found. Install with: pip install edge-tts".into())
-            } else {
-                AivyxError::Other(format!("edge-tts execution failed: {e}"))
-            }
-        })?;
+        let output = tokio::time::timeout(std::time::Duration::from_secs(60), cmd.output())
+            .await
+            .map_err(|_| {
+                // Clean up temp file on timeout
+                let path = output_path.clone();
+                tokio::spawn(async move {
+                    let _ = tokio::fs::remove_file(&path).await;
+                });
+                AivyxError::Other("edge-tts timed out after 60 seconds".into())
+            })?
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    AivyxError::Config(
+                        "edge-tts not found. Install with: pip install edge-tts".into(),
+                    )
+                } else {
+                    AivyxError::Other(format!("edge-tts execution failed: {e}"))
+                }
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

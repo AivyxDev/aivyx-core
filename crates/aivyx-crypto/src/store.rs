@@ -114,6 +114,17 @@ impl EncryptedStore {
     }
 
     /// List all keys in the store.
+    /// Lightweight probe that verifies the database is accessible.
+    ///
+    /// Opens a read transaction without iterating — the cheapest possible
+    /// operation to confirm the redb file isn't locked or corrupt.
+    pub fn health_probe(&self) -> Result<()> {
+        self.db
+            .begin_read()
+            .map_err(|e| AivyxError::Storage(format!("health probe failed: {e}")))?;
+        Ok(())
+    }
+
     pub fn list_keys(&self) -> Result<Vec<String>> {
         let txn = self
             .db
@@ -202,7 +213,7 @@ impl EncryptedStore {
         let cipher = ChaCha20Poly1305::new(master_key.expose_secret().into());
 
         let mut nonce_bytes = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = chacha20poly1305::Nonce::from(nonce_bytes);
 
         let ciphertext = cipher

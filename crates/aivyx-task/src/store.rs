@@ -176,7 +176,9 @@ mod tests {
 
         let updated = store
             .update(&id, &key, |t| {
-                t.start();
+                t.set_steps(vec![crate::step::TaskStep::new(0, "s")])
+                    .unwrap();
+                t.start().unwrap();
             })
             .unwrap();
         assert_eq!(updated.status, TaskStatus::Executing);
@@ -228,7 +230,9 @@ mod tests {
     fn query_by_status() {
         let (store, key, dir) = temp_store();
         let mut t1 = Task::new("active", "agent");
-        t1.start();
+        t1.set_steps(vec![crate::step::TaskStep::new(0, "s")])
+            .unwrap();
+        t1.start().unwrap();
         let t2 = Task::new("planning", "agent");
         store.save(&t1, &key).unwrap();
         store.save(&t2, &key).unwrap();
@@ -284,9 +288,14 @@ mod tests {
     fn count_by_status_groups() {
         let (store, key, dir) = temp_store();
         let mut t1 = Task::new("a", "agent");
-        t1.start();
+        t1.set_steps(vec![crate::step::TaskStep::new(0, "s")])
+            .unwrap();
+        t1.start().unwrap();
         let mut t2 = Task::new("b", "agent");
-        t2.complete(None);
+        t2.set_steps(vec![crate::step::TaskStep::new(0, "s")])
+            .unwrap();
+        t2.start().unwrap();
+        t2.complete(None).unwrap();
         let t3 = Task::new("c", "agent");
         store.save(&t1, &key).unwrap();
         store.save(&t2, &key).unwrap();

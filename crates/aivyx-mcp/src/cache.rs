@@ -22,12 +22,18 @@ struct CacheEntry {
 ///
 /// Cache keys are generated from the tool name + input JSON via SHA-256.
 /// Entries expire after a configurable TTL (default: 5 minutes).
+/// Capped at `max_entries` to prevent unbounded memory growth.
 pub struct ToolResultCache {
     /// Cached entries keyed by hash string.
     entries: Mutex<HashMap<String, CacheEntry>>,
     /// Default time-to-live for cached entries.
     default_ttl: Duration,
+    /// Maximum number of entries before eviction is forced.
+    max_entries: usize,
 }
+
+/// Default maximum cache entries (1024).
+const DEFAULT_MAX_ENTRIES: usize = 1024;
 
 impl ToolResultCache {
     /// Create a new cache with the given TTL for entries.
@@ -35,7 +41,14 @@ impl ToolResultCache {
         Self {
             entries: Mutex::new(HashMap::new()),
             default_ttl,
+            max_entries: DEFAULT_MAX_ENTRIES,
         }
+    }
+
+    /// Override the maximum number of cached entries.
+    pub fn with_max_entries(mut self, max_entries: usize) -> Self {
+        self.max_entries = max_entries;
+        self
     }
 
     /// Look up a cached value by key. Returns `None` if not found or expired.
@@ -52,8 +65,30 @@ impl ToolResultCache {
     }
 
     /// Insert a value into the cache with the default TTL.
+    ///
+    /// If the cache is at capacity, expired entries are evicted first.
+    /// If still at capacity, the entry closest to expiration is removed.
     pub fn insert(&self, key: &str, value: serde_json::Value) {
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+
+        // If at capacity and this is a new key, make room.
+        if entries.len() >= self.max_entries && !entries.contains_key(key) {
+            // First pass: evict expired entries.
+            let now = Instant::now();
+            entries.retain(|_, entry| entry.expires_at > now);
+
+            // Second pass: if still at capacity, evict the entry nearest expiration.
+            if entries.len() >= self.max_entries {
+                if let Some(oldest_key) = entries
+                    .iter()
+                    .min_by_key(|(_, e)| e.expires_at)
+                    .map(|(k, _)| k.clone())
+                {
+                    entries.remove(&oldest_key);
+                }
+            }
+        }
+
         entries.insert(
             key.to_string(),
             CacheEntry {
@@ -194,5 +229,66 @@ mod tests {
 
         // Also verify get returns None for expired
         assert!(cache.get("fresh").is_none());
+    }
+
+    #[test]
+    fn insert_evicts_when_at_capacity() {
+        let cache = ToolResultCache::new(Duration::from_secs(300)).with_max_entries(2);
+
+        cache.insert("a", serde_json::json!("val_a"));
+        cache.insert("b", serde_json::json!("val_b"));
+        assert_eq!(cache.len(), 2);
+
+        // Third insert should evict the entry nearest expiration ("a", inserted first).
+        cache.insert("c", serde_json::json!("val_c"));
+        assert_eq!(cache.len(), 2);
+        assert!(cache.get("c").is_some());
+        assert!(cache.get("b").is_some());
+        assert!(cache.get("a").is_none());
+    }
+
+    #[test]
+    fn insert_prefers_evicting_expired_over_live() {
+        let cache = ToolResultCache::new(Duration::from_millis(1)).with_max_entries(2);
+
+        cache.insert("old", serde_json::json!("will_expire"));
+        std::thread::sleep(Duration::from_millis(5));
+
+        // Re-create with longer TTL for remaining inserts by using a fresh cache
+        // with the same max. Instead, test with mixed expiry by inserting the
+        // live entry with a fresh cache that has a long TTL.
+        let cache = ToolResultCache::new(Duration::from_secs(300)).with_max_entries(2);
+        // Manually insert an already-expired entry.
+        {
+            let mut entries = cache.entries.lock().unwrap();
+            entries.insert(
+                "expired".into(),
+                super::CacheEntry {
+                    value: serde_json::json!("gone"),
+                    expires_at: Instant::now() - Duration::from_secs(1),
+                },
+            );
+        }
+        cache.insert("live", serde_json::json!("here"));
+        assert_eq!(cache.len(), 2);
+
+        // Now insert a third — the expired entry should be evicted, not "live".
+        cache.insert("new", serde_json::json!("fresh"));
+        assert_eq!(cache.len(), 2);
+        assert!(cache.get("live").is_some());
+        assert!(cache.get("new").is_some());
+    }
+
+    #[test]
+    fn update_existing_key_does_not_evict() {
+        let cache = ToolResultCache::new(Duration::from_secs(300)).with_max_entries(2);
+        cache.insert("a", serde_json::json!(1));
+        cache.insert("b", serde_json::json!(2));
+
+        // Updating "a" should not trigger eviction since the key already exists.
+        cache.insert("a", serde_json::json!(10));
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.get("a").unwrap(), serde_json::json!(10));
+        assert!(cache.get("b").is_some());
     }
 }

@@ -94,6 +94,10 @@ pub enum AivyxError {
         source: Box<AivyxError>,
     },
 
+    /// Input validation failure (size limits, format, constraints).
+    #[error("validation error: {0}")]
+    Validation(String),
+
     /// Catch-all for errors that don't fit another variant.
     #[error("{0}")]
     Other(String),

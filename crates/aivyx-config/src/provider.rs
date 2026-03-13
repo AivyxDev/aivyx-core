@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 /// LLM provider configuration.
 ///
 /// API keys are stored by reference — `api_key_ref` is a name pointing into the
-/// encrypted store, never the actual secret.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// encrypted store, never the actual secret. The custom `Debug` impl redacts
+/// `api_key_ref` to avoid leaking reference names in logs or panic output.
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ProviderConfig {
     Claude {
@@ -36,6 +37,36 @@ pub enum ProviderConfig {
         /// Model identifier.
         model: String,
     },
+}
+
+impl std::fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Claude { model, .. } => f
+                .debug_struct("Claude")
+                .field("api_key_ref", &"[REDACTED]")
+                .field("model", model)
+                .finish(),
+            Self::OpenAI { model, .. } => f
+                .debug_struct("OpenAI")
+                .field("api_key_ref", &"[REDACTED]")
+                .field("model", model)
+                .finish(),
+            Self::Ollama { base_url, model } => f
+                .debug_struct("Ollama")
+                .field("base_url", base_url)
+                .field("model", model)
+                .finish(),
+            Self::OpenAICompatible {
+                base_url, model, ..
+            } => f
+                .debug_struct("OpenAICompatible")
+                .field("api_key_ref", &"[REDACTED]")
+                .field("base_url", base_url)
+                .field("model", model)
+                .finish(),
+        }
+    }
 }
 
 /// Per-token pricing for an LLM model.

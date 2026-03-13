@@ -514,8 +514,12 @@ impl Tool for DirectoryListTool {
             .ok_or_else(|| AivyxError::Agent("directory_list: missing 'path' parameter".into()))?;
         let show_hidden = input["show_hidden"].as_bool().unwrap_or(false);
 
+        let canonical = resolve_and_validate_path(path, "directory_list").await?;
+
         let mut entries_out = Vec::new();
-        let mut read_dir = tokio::fs::read_dir(path).await.map_err(AivyxError::Io)?;
+        let mut read_dir = tokio::fs::read_dir(&canonical)
+            .await
+            .map_err(AivyxError::Io)?;
 
         let mut raw_entries = Vec::new();
         while let Some(entry) = read_dir.next_entry().await.map_err(AivyxError::Io)? {
@@ -563,7 +567,7 @@ impl Tool for DirectoryListTool {
         }
 
         Ok(serde_json::json!({
-            "path": path,
+            "path": canonical.display().to_string(),
             "entries": entries_out,
         }))
     }

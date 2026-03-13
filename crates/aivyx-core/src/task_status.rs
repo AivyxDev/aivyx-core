@@ -49,6 +49,30 @@ impl TaskStatus {
         )
     }
 
+    /// Returns `true` if transitioning from `self` to `target` is valid.
+    ///
+    /// Valid transitions:
+    /// - `Planning` → `Planned`, `Failed`, `Cancelled`
+    /// - `Planned` → `Executing`, `Failed`, `Cancelled`
+    /// - `Executing` → `Verifying`, `AwaitingApproval`, `Completed`, `Failed`, `Cancelled`
+    /// - `Verifying` → `Executing`, `Completed`, `Failed`, `Cancelled`
+    /// - `AwaitingApproval` → `Executing`, `Completed`, `Failed`, `Cancelled`
+    /// - Terminal states (`Completed`, `Failed`, `Cancelled`) → nothing
+    pub fn can_transition_to(&self, target: TaskStatus) -> bool {
+        use TaskStatus::*;
+        matches!(
+            (self, target),
+            (Planning, Planned | Failed | Cancelled)
+                | (Planned, Executing | Failed | Cancelled)
+                | (
+                    Executing,
+                    Verifying | AwaitingApproval | Completed | Failed | Cancelled
+                )
+                | (Verifying, Executing | Completed | Failed | Cancelled)
+                | (AwaitingApproval, Executing | Completed | Failed | Cancelled)
+        )
+    }
+
     /// Returns `true` if the task is actively progressing.
     pub fn is_active(&self) -> bool {
         matches!(

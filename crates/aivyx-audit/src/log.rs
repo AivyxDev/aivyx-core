@@ -126,6 +126,9 @@ impl AuditLog {
             });
         }
 
+        // Bootstrap: the first entry chains from a deterministic zero HMAC.
+        // This matches what append() uses for sequence 0, so any tampering
+        // of the first entry (or insertion before it) will break the chain.
         let mut prev_hmac_bytes = vec![0u8; 32];
 
         for (i, entry) in entries.iter().enumerate() {

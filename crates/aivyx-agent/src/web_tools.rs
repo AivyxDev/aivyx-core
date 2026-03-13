@@ -368,6 +368,18 @@ impl Tool for TextDiffTool {
             .await
             .map_err(AivyxError::Io)?;
 
+        // Guard against O(n*m) memory exhaustion in the LCS algorithm.
+        // 10 000 lines per file ≈ 100M table entries (800 MB) at the limit.
+        const MAX_DIFF_LINES: usize = 10_000;
+        let lines_a = content_a.lines().count();
+        let lines_b = content_b.lines().count();
+        if lines_a > MAX_DIFF_LINES || lines_b > MAX_DIFF_LINES {
+            return Err(AivyxError::Validation(format!(
+                "text_diff: files too large for line-by-line diff \
+                 ({lines_a} + {lines_b} lines, max {MAX_DIFF_LINES} per file)"
+            )));
+        }
+
         let (diff, additions, deletions) = Self::compute_diff(&content_a, &content_b);
 
         let max_len = MAX_TOOL_OUTPUT_CHARS;

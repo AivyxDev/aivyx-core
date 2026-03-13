@@ -57,12 +57,26 @@ fn extract_event_type(event: &crate::event::AuditEvent) -> String {
     "Unknown".to_string()
 }
 
-/// Escape a CSV field value (wrap in quotes if it contains commas).
+/// Escape a CSV field value.
+///
+/// Wraps in quotes when the value contains commas, quotes, or newlines.
+/// Prefixes with a single quote when the value starts with `=`, `+`, `-`,
+/// or `@` to neutralize formula injection in spreadsheet applications.
 fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
-        format!("\"{}\"", s.replace('"', "\"\""))
+    let s = if s.starts_with('=') || s.starts_with('+') || s.starts_with('-') || s.starts_with('@')
+    {
+        // Tab prefix is the OWASP-recommended mitigation for CSV injection.
+        // A leading tab is stripped by most spreadsheet apps but prevents
+        // the cell from being interpreted as a formula.
+        format!("\t{s}")
     } else {
         s.to_string()
+    };
+
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\t') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s
     }
 }
 
@@ -118,5 +132,28 @@ mod tests {
         assert!(lines[2].contains("AuditVerified"));
 
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn csv_escape_neutralizes_formula_injection() {
+        // Cells starting with formula triggers must be prefixed
+        let escaped = csv_escape("=cmd|'/C calc'!A0");
+        assert!(
+            escaped.starts_with("\"\t="),
+            "expected tab-prefix, got: {escaped}"
+        );
+        assert!(!escaped.starts_with("\"="));
+
+        let escaped = csv_escape("+1+1");
+        assert!(escaped.contains("\t+"));
+
+        let escaped = csv_escape("-1-1");
+        assert!(escaped.contains("\t-"));
+
+        let escaped = csv_escape("@SUM(A1:A10)");
+        assert!(escaped.contains("\t@"));
+
+        // Normal text should pass through unchanged
+        assert_eq!(csv_escape("hello"), "hello");
     }
 }

@@ -1,6 +1,6 @@
 //! The `Task` struct — a persistent object tracking a multi-step goal.
 
-use aivyx_core::{SessionId, TaskId};
+use aivyx_core::{AivyxError, Result, SessionId, TaskId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -95,16 +95,31 @@ impl Task {
         }
     }
 
+    /// Validate and apply a status transition, returning an error for
+    /// invalid transitions (e.g. `Completed` → `Executing`).
+    fn transition_to(&mut self, target: TaskStatus) -> Result<()> {
+        if !self.status.can_transition_to(target) {
+            return Err(AivyxError::Task(format!(
+                "invalid task transition: {} → {}",
+                self.status, target
+            )));
+        }
+        self.status = target;
+        Ok(())
+    }
+
     /// Set the decomposed steps, transitioning to `Planned`.
-    pub fn set_steps(&mut self, steps: Vec<TaskStep>) {
+    pub fn set_steps(&mut self, steps: Vec<TaskStep>) -> Result<()> {
+        self.transition_to(TaskStatus::Planned)?;
         self.steps = steps;
-        self.status = TaskStatus::Planned;
+        Ok(())
     }
 
     /// Begin execution, transitioning to `Executing`.
-    pub fn start(&mut self) {
-        self.status = TaskStatus::Executing;
+    pub fn start(&mut self) -> Result<()> {
+        self.transition_to(TaskStatus::Executing)?;
         self.started_at = Some(Utc::now());
+        Ok(())
     }
 
     /// Advance to the next step. Returns `true` if there are more steps.
@@ -126,23 +141,26 @@ impl Task {
     }
 
     /// Mark the task as completed with an optional output.
-    pub fn complete(&mut self, output: Option<String>) {
-        self.status = TaskStatus::Completed;
+    pub fn complete(&mut self, output: Option<String>) -> Result<()> {
+        self.transition_to(TaskStatus::Completed)?;
         self.completed_at = Some(Utc::now());
         self.output = output;
+        Ok(())
     }
 
     /// Mark the task as failed with an error message.
-    pub fn fail(&mut self, error: impl Into<String>) {
-        self.status = TaskStatus::Failed;
+    pub fn fail(&mut self, error: impl Into<String>) -> Result<()> {
+        self.transition_to(TaskStatus::Failed)?;
         self.completed_at = Some(Utc::now());
         self.error = Some(error.into());
+        Ok(())
     }
 
     /// Cancel the task.
-    pub fn cancel(&mut self) {
-        self.status = TaskStatus::Cancelled;
+    pub fn cancel(&mut self) -> Result<()> {
+        self.transition_to(TaskStatus::Cancelled)?;
         self.completed_at = Some(Utc::now());
+        Ok(())
     }
 
     /// Wall-clock duration from `started_at` to `completed_at` in milliseconds.
@@ -202,7 +220,7 @@ mod tests {
     fn set_steps_transitions_to_planned() {
         let mut task = Task::new("goal", "agent");
         let steps = vec![TaskStep::new(0, "step one"), TaskStep::new(1, "step two")];
-        task.set_steps(steps);
+        task.set_steps(steps).unwrap();
         assert_eq!(task.status, TaskStatus::Planned);
         assert_eq!(task.steps.len(), 2);
     }
@@ -210,7 +228,8 @@ mod tests {
     #[test]
     fn start_transitions_to_executing() {
         let mut task = Task::new("goal", "agent");
-        task.start();
+        task.set_steps(vec![TaskStep::new(0, "step one")]).unwrap();
+        task.start().unwrap();
         assert_eq!(task.status, TaskStatus::Executing);
         assert!(task.started_at.is_some());
     }
@@ -222,7 +241,8 @@ mod tests {
             TaskStep::new(0, "a"),
             TaskStep::new(1, "b"),
             TaskStep::new(2, "c"),
-        ]);
+        ])
+        .unwrap();
         assert_eq!(task.current_step, 0);
         assert!(task.next_step());
         assert_eq!(task.current_step, 1);
@@ -249,7 +269,9 @@ mod tests {
     #[test]
     fn complete_sets_terminal_state() {
         let mut task = Task::new("goal", "agent");
-        task.complete(Some("result".into()));
+        task.set_steps(vec![TaskStep::new(0, "s")]).unwrap();
+        task.start().unwrap();
+        task.complete(Some("result".into())).unwrap();
         assert_eq!(task.status, TaskStatus::Completed);
         assert!(task.completed_at.is_some());
         assert_eq!(task.output.as_deref(), Some("result"));
@@ -258,7 +280,8 @@ mod tests {
     #[test]
     fn fail_sets_error() {
         let mut task = Task::new("goal", "agent");
-        task.fail("something broke");
+        // Planning → Failed is valid (planning itself can fail)
+        task.fail("something broke").unwrap();
         assert_eq!(task.status, TaskStatus::Failed);
         assert!(task.completed_at.is_some());
         assert_eq!(task.error.as_deref(), Some("something broke"));
@@ -267,9 +290,21 @@ mod tests {
     #[test]
     fn cancel_sets_cancelled() {
         let mut task = Task::new("goal", "agent");
-        task.cancel();
+        task.cancel().unwrap();
         assert_eq!(task.status, TaskStatus::Cancelled);
         assert!(task.completed_at.is_some());
+    }
+
+    #[test]
+    fn invalid_transition_rejected() {
+        let mut task = Task::new("goal", "agent");
+        task.set_steps(vec![TaskStep::new(0, "s")]).unwrap();
+        task.start().unwrap();
+        task.complete(None).unwrap();
+        // Completed → Executing is invalid
+        assert!(task.start().is_err());
+        // Completed → Failed is invalid
+        assert!(task.fail("nope").is_err());
     }
 
     #[test]
@@ -277,7 +312,7 @@ mod tests {
         let mut task = Task::new("research", "agent-1");
         task.priority = TaskPriority::High;
         task.tags = vec!["research".into(), "urgent".into()];
-        task.set_steps(vec![TaskStep::new(0, "step 1")]);
+        task.set_steps(vec![TaskStep::new(0, "step 1")]).unwrap();
 
         let json = serde_json::to_string(&task).unwrap();
         let parsed: Task = serde_json::from_str(&json).unwrap();
@@ -324,7 +359,8 @@ mod tests {
     #[test]
     fn duration_ms_none_when_still_running() {
         let mut task = Task::new("goal", "agent");
-        task.start();
+        task.set_steps(vec![TaskStep::new(0, "s")]).unwrap();
+        task.start().unwrap();
         assert!(task.duration_ms().is_none());
     }
 

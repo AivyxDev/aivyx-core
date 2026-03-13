@@ -307,6 +307,7 @@ mod tests {
             id: id.to_string(),
             url: format!("https://{id}.example.com"),
             public_key: "AAAA".to_string(),
+            bearer_token: None,
             capabilities: capabilities.into_iter().map(String::from).collect(),
             trust_policy: None,
         }

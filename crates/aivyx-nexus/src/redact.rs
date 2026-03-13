@@ -108,17 +108,20 @@ static DEFAULT_PATTERNS: LazyLock<Vec<(&str, &str)>> = LazyLock::new(|| {
 
 impl RedactionFilter {
     /// Create a new filter with the default credential patterns.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any built-in regex pattern fails to compile. This is a
+    /// programming bug — silently dropping a pattern would let credentials
+    /// leak into public posts.
     pub fn new() -> Self {
         let patterns = DEFAULT_PATTERNS
             .iter()
-            .filter_map(|(name, pattern)| {
-                match Regex::new(pattern) {
-                    Ok(regex) => Some(CredentialPattern { name, regex }),
-                    Err(e) => {
-                        tracing::error!(pattern = name, error = %e, "failed to compile redaction regex");
-                        None
-                    }
-                }
+            .map(|(name, pattern)| {
+                let regex = Regex::new(pattern).unwrap_or_else(|e| {
+                    panic!("redaction pattern '{name}' failed to compile: {e}")
+                });
+                CredentialPattern { name, regex }
             })
             .collect();
 

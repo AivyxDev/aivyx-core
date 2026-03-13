@@ -91,6 +91,13 @@ impl SessionStore {
         Ok(sessions)
     }
 
+    /// Lightweight probe to verify the store is accessible.
+    ///
+    /// Used by the `/health` endpoint to detect redb lock/corruption issues.
+    pub fn health_probe(&self) -> Result<()> {
+        self.store.health_probe()
+    }
+
     /// Delete a session by ID.
     pub fn delete(&self, session_id: &SessionId) -> Result<()> {
         let key = format!("session:{session_id}");

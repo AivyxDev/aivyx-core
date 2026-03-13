@@ -327,9 +327,18 @@ impl LlmProvider for OpenAICompatibleProvider {
         let mut tc_index_map: std::collections::HashMap<u64, (String, String, String)> =
             std::collections::HashMap::new();
 
+        // 10 MB guard — prevents memory exhaustion from a malicious/broken upstream
+        const MAX_BUFFER_SIZE: usize = 10 * 1024 * 1024;
+
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| AivyxError::Http(format!("stream read error: {e}")))?;
             buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            if buffer.len() > MAX_BUFFER_SIZE {
+                return Err(AivyxError::LlmProvider(
+                    "SSE stream buffer exceeded 10 MB — aborting".into(),
+                ));
+            }
 
             while let Some(line_end) = buffer.find('\n') {
                 let line = buffer[..line_end].trim_end().to_string();

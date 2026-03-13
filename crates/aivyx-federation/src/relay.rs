@@ -28,15 +28,19 @@ impl FederationClient {
 
         let header = self.auth().sign_request(&body_bytes);
 
-        let resp = self
+        let mut request = self
             .http()
             .post(&url)
             .header("Content-Type", "application/json")
             .header("X-Federation-Instance", &header.instance_id)
             .header("X-Federation-Timestamp", header.timestamp.to_string())
-            .header("X-Federation-Signature", &header.signature)
-            // Also send the bearer token if the peer requires standard auth
-            .header("Authorization", format!("Bearer {}", "federation"))
+            .header("X-Federation-Signature", &header.signature);
+
+        if let Some(ref token) = peer_config.bearer_token {
+            request = request.header("Authorization", format!("Bearer {token}"));
+        }
+
+        let resp = request
             .body(body_bytes)
             .send()
             .await
@@ -81,14 +85,19 @@ impl FederationClient {
 
         let header = self.auth().sign_request(&body_bytes);
 
-        let resp = self
+        let mut request = self
             .http()
             .post(&url)
             .header("Content-Type", "application/json")
             .header("X-Federation-Instance", &header.instance_id)
             .header("X-Federation-Timestamp", header.timestamp.to_string())
-            .header("X-Federation-Signature", &header.signature)
-            .header("Authorization", format!("Bearer {}", "federation"))
+            .header("X-Federation-Signature", &header.signature);
+
+        if let Some(ref token) = peer_config.bearer_token {
+            request = request.header("Authorization", format!("Bearer {token}"));
+        }
+
+        let resp = request
             .body(body_bytes)
             .send()
             .await
@@ -272,14 +281,19 @@ impl FederationClient {
 
         let header = self.auth().sign_request(&body_bytes);
 
-        let resp = self
+        let mut request = self
             .http()
             .post(&url)
             .header("Content-Type", "application/json")
             .header("X-Federation-Instance", &header.instance_id)
             .header("X-Federation-Timestamp", header.timestamp.to_string())
-            .header("X-Federation-Signature", &header.signature)
-            .header("Authorization", format!("Bearer {}", "federation"))
+            .header("X-Federation-Signature", &header.signature);
+
+        if let Some(ref token) = peer_config.bearer_token {
+            request = request.header("Authorization", format!("Bearer {token}"));
+        }
+
+        let resp = request
             .body(body_bytes)
             .send()
             .await

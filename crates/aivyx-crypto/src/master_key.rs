@@ -19,7 +19,7 @@ impl MasterKey {
     /// Generate a random 256-bit master key.
     pub fn generate() -> Self {
         let mut bytes = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut bytes);
+        rand::rngs::OsRng.fill_bytes(&mut bytes);
         let boxed: Box<[u8]> = Box::from(bytes.as_slice());
         bytes.zeroize();
         Self {
@@ -46,7 +46,7 @@ impl MasterKey {
         let params = KdfParams::default();
 
         let mut salt = [0u8; 16];
-        rand::thread_rng().fill_bytes(&mut salt);
+        rand::rngs::OsRng.fill_bytes(&mut salt);
 
         let mut derived = derive_key(passphrase, &salt, &params)?;
 
@@ -54,7 +54,7 @@ impl MasterKey {
         derived.zeroize();
 
         let mut nonce_bytes = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = chacha20poly1305::Nonce::from(nonce_bytes);
 
         let ciphertext = cipher

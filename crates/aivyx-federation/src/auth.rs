@@ -8,13 +8,77 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aivyx_core::AivyxError;
 
 /// Maximum age of a signed request before it's considered stale (60 seconds).
 const MAX_REQUEST_AGE_SECS: u64 = 60;
+
+/// Replay attack guard — remembers recently seen signatures and rejects
+/// duplicates within the [`MAX_REQUEST_AGE_SECS`] window.
+///
+/// Without this, a valid signed request could be replayed multiple times
+/// within the 60-second freshness window.
+pub struct ReplayGuard {
+    /// Set of `"instance_id:timestamp:signature"` strings seen recently.
+    seen: Mutex<HashSet<String>>,
+    /// Timestamp of the last eviction pass.
+    last_evict: Mutex<u64>,
+}
+
+impl ReplayGuard {
+    pub fn new() -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        Self {
+            seen: Mutex::new(HashSet::new()),
+            last_evict: Mutex::new(now),
+        }
+    }
+
+    /// Check if this request has been seen before. Returns `Err` if replayed.
+    ///
+    /// Must be called **after** signature verification succeeds.
+    pub fn check_and_record(&self, header: &SignedHeader) -> Result<(), AivyxError> {
+        let nonce = format!(
+            "{}:{}:{}",
+            header.instance_id, header.timestamp, header.signature
+        );
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Periodic eviction: clear old entries every MAX_REQUEST_AGE_SECS
+        {
+            let mut last = self.last_evict.lock().unwrap_or_else(|e| e.into_inner());
+            if now.saturating_sub(*last) >= MAX_REQUEST_AGE_SECS {
+                seen.clear();
+                *last = now;
+            }
+        }
+
+        if !seen.insert(nonce) {
+            return Err(AivyxError::Other("replayed federation request".into()));
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for ReplayGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// A signed federation request header.
 #[derive(Debug, Clone, Serialize, Deserialize)]

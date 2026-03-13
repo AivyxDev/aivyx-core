@@ -111,7 +111,13 @@ impl KnowledgeGraph {
             .push(inbound);
     }
 
+    /// Maximum number of paths returned from a single traversal.
+    const MAX_TRAVERSAL_RESULTS: usize = 500;
+
     /// BFS traversal from entity up to `max_hops`, returning all paths found.
+    ///
+    /// Capped at [`MAX_TRAVERSAL_RESULTS`] to prevent combinatorial explosion
+    /// in densely connected graphs.
     pub fn traverse(&self, entity: &str, max_hops: usize) -> Vec<GraphPath> {
         if !self.entities.contains(entity) {
             return Vec::new();
@@ -139,6 +145,10 @@ impl KnowledgeGraph {
                         hops: new_path.clone(),
                     });
 
+                    if paths.len() >= Self::MAX_TRAVERSAL_RESULTS {
+                        return paths;
+                    }
+
                     if !visited.contains(&edge.target) {
                         visited.insert(edge.target.clone());
                         queue.push_back((edge.target.clone(), new_path));
@@ -151,6 +161,8 @@ impl KnowledgeGraph {
     }
 
     /// Find all paths between two entities using BFS, up to `max_depth`.
+    ///
+    /// Capped at [`MAX_TRAVERSAL_RESULTS`] to prevent combinatorial explosion.
     pub fn find_paths(&self, from: &str, to: &str, max_depth: usize) -> Vec<GraphPath> {
         if !self.entities.contains(from) || !self.entities.contains(to) {
             return Vec::new();
@@ -177,6 +189,9 @@ impl KnowledgeGraph {
 
                     if edge.target == to {
                         results.push(GraphPath { hops: new_path });
+                        if results.len() >= Self::MAX_TRAVERSAL_RESULTS {
+                            return results;
+                        }
                         continue;
                     }
 

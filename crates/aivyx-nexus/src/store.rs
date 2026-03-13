@@ -10,7 +10,10 @@ use aivyx_core::{AivyxError, InteractionId, PostId, Result};
 use chrono::{DateTime, Utc};
 use redb::{Database, ReadableTable, TableDefinition};
 
-use crate::types::{AgentProfile, FeedQuery, Interaction, InteractionKind, NexusPost, Reputation};
+use crate::types::{
+    AgentProfile, FeedQuery, Interaction, InteractionKind, MAX_INTERACTION_MSG_LEN,
+    MAX_POST_CONTENT_LEN, MAX_TAG_LEN, MAX_TAGS_PER_POST, NexusPost, Reputation,
+};
 
 // ── Table definitions ───────────────────────────────────────────
 
@@ -30,7 +33,9 @@ const REPUTATION: TableDefinition<&str, &[u8]> = TableDefinition::new("reputatio
 /// Key format: "{MAX_TS - timestamp}:{post_id}" so default ordering is newest first.
 const FEED_INDEX: TableDefinition<&str, &[u8]> = TableDefinition::new("feed_index");
 
-/// Tag index: "tag:post_id" → () for tag-based lookups.
+/// Tag index: "tag\0post_id" → () for tag-based lookups.
+/// Uses null byte as separator since neither tags nor UUIDs can contain \0,
+/// preventing collisions with tags that contain colons.
 const TAG_INDEX: TableDefinition<&str, &[u8]> = TableDefinition::new("tag_index");
 
 /// Interaction-by-post index: "post_id:interaction_id" → () for counting.
@@ -102,7 +107,31 @@ impl NexusStore {
     // ── Posts ────────────────────────────────────────────────────
 
     /// Save a post and update all indexes.
+    ///
+    /// Validates content length, tag count, and individual tag length before
+    /// persisting to prevent unbounded storage consumption.
     pub fn save_post(&self, post: &NexusPost) -> Result<()> {
+        if post.content.len() > MAX_POST_CONTENT_LEN {
+            return Err(AivyxError::Validation(format!(
+                "post content exceeds {MAX_POST_CONTENT_LEN} chars ({} given)",
+                post.content.len()
+            )));
+        }
+        if post.tags.len() > MAX_TAGS_PER_POST {
+            return Err(AivyxError::Validation(format!(
+                "post has {} tags, max is {MAX_TAGS_PER_POST}",
+                post.tags.len()
+            )));
+        }
+        for tag in &post.tags {
+            if tag.len() > MAX_TAG_LEN {
+                return Err(AivyxError::Validation(format!(
+                    "tag '{}' exceeds {MAX_TAG_LEN} chars",
+                    &tag[..MAX_TAG_LEN]
+                )));
+            }
+        }
+
         let bytes = serde_json::to_vec(post)
             .map_err(|e| AivyxError::Other(format!("serialize post: {e}")))?;
         let id_str = post.id.to_string();
@@ -126,7 +155,7 @@ impl NexusStore {
             // Tag index
             let mut tags = txn.open_table(TAG_INDEX).map_err(map_table_err)?;
             for tag in &post.tags {
-                let tag_key = format!("{}:{}", tag.to_lowercase(), id_str);
+                let tag_key = format!("{}\0{}", tag.to_lowercase(), id_str);
                 tags.insert(tag_key.as_str(), &[] as &[u8])
                     .map_err(map_insert_err)?;
             }
@@ -338,7 +367,18 @@ impl NexusStore {
     // ── Interactions ────────────────────────────────────────────
 
     /// Save an interaction and update indexes.
+    ///
+    /// Validates message length before persisting.
     pub fn save_interaction(&self, interaction: &Interaction) -> Result<()> {
+        if let Some(ref msg) = interaction.message {
+            if msg.len() > MAX_INTERACTION_MSG_LEN {
+                return Err(AivyxError::Validation(format!(
+                    "interaction message exceeds {MAX_INTERACTION_MSG_LEN} chars ({} given)",
+                    msg.len()
+                )));
+            }
+        }
+
         let bytes = serde_json::to_vec(interaction)
             .map_err(|e| AivyxError::Other(format!("serialize interaction: {e}")))?;
         let id_str = interaction.id.to_string();

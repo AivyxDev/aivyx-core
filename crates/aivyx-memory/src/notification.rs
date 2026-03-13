@@ -94,8 +94,19 @@ impl NotificationStore {
         self.store.put(&store_key, &json, key)
     }
 
-    /// List all pending notifications sorted by creation time (oldest first).
+    /// Maximum notifications returned by `list()` to prevent unbounded memory use.
+    const DEFAULT_LIST_LIMIT: usize = 500;
+
+    /// List pending notifications sorted by creation time (oldest first).
+    ///
+    /// Capped at [`DEFAULT_LIST_LIMIT`] entries. Use `list_with_limit` for
+    /// a custom cap.
     pub fn list(&self, key: &MasterKey) -> Result<Vec<Notification>> {
+        self.list_with_limit(key, Self::DEFAULT_LIST_LIMIT)
+    }
+
+    /// List pending notifications with an explicit limit.
+    pub fn list_with_limit(&self, key: &MasterKey, limit: usize) -> Result<Vec<Notification>> {
         let keys = self.store.list_keys()?;
         let mut notifs: Vec<Notification> = Vec::new();
         for k in keys {
@@ -107,6 +118,7 @@ impl NotificationStore {
             }
         }
         notifs.sort_by_key(|n| n.created_at);
+        notifs.truncate(limit);
         Ok(notifs)
     }
 

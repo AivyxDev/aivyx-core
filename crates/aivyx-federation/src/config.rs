@@ -33,11 +33,20 @@ pub struct PeerConfig {
     pub id: String,
 
     /// Base URL of the peer engine (e.g., `https://api.aivyx-studio.io`).
+    ///
+    /// Must use `https://` — plain HTTP is rejected to prevent credential
+    /// exposure over unencrypted connections.
     pub url: String,
 
     /// The peer's Ed25519 public key (base64-encoded).
     /// Used to verify responses from this peer.
     pub public_key: String,
+
+    /// Bearer token to send when authenticating with this peer.
+    /// Each peer can require a different token. If absent, no
+    /// `Authorization` header is sent (Ed25519 signatures are still used).
+    #[serde(default)]
+    pub bearer_token: Option<String>,
 
     /// What this peer exposes to us.
     #[serde(default = "default_capabilities")]
@@ -110,6 +119,27 @@ impl FederationConfig {
             failover: FailoverConfig::default(),
         }
     }
+
+    /// Validate federation config. Returns an error if any peer URL uses
+    /// plain HTTP (credentials would be exposed) or is malformed.
+    pub fn validate(&self) -> Result<(), aivyx_core::AivyxError> {
+        for peer in &self.peers {
+            if peer.url.starts_with("http://") {
+                return Err(aivyx_core::AivyxError::Config(format!(
+                    "peer '{}' uses plain HTTP ({}). Federation requires HTTPS \
+                     to protect bearer tokens and signatures in transit",
+                    peer.id, peer.url,
+                )));
+            }
+            if !peer.url.starts_with("https://") {
+                return Err(aivyx_core::AivyxError::Config(format!(
+                    "peer '{}' URL must start with https:// (got '{}')",
+                    peer.id, peer.url,
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -167,5 +197,55 @@ mod tests {
     fn trust_policy_rejects_invalid_tier() {
         let json = r#"{"allowed_scopes": [], "max_tier": "invalid"}"#;
         assert!(serde_json::from_str::<TrustPolicy>(json).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_http_peer_url() {
+        let config = FederationConfig {
+            instance_id: "test".into(),
+            enabled: true,
+            private_key_path: None,
+            peers: vec![PeerConfig {
+                id: "insecure".into(),
+                url: "http://peer.example.com".into(),
+                public_key: "AAAA".into(),
+                bearer_token: Some("secret".into()),
+                capabilities: vec![],
+                trust_policy: None,
+            }],
+            failover: FailoverConfig::default(),
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("plain HTTP"));
+    }
+
+    #[test]
+    fn validate_accepts_https_peer_url() {
+        let config = FederationConfig {
+            instance_id: "test".into(),
+            enabled: true,
+            private_key_path: None,
+            peers: vec![PeerConfig {
+                id: "secure".into(),
+                url: "https://peer.example.com".into(),
+                public_key: "AAAA".into(),
+                bearer_token: None,
+                capabilities: vec![],
+                trust_policy: None,
+            }],
+            failover: FailoverConfig::default(),
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn bearer_token_optional_in_serde() {
+        let json = r#"{"id":"p","url":"https://p.com","public_key":"AAAA"}"#;
+        let peer: PeerConfig = serde_json::from_str(json).unwrap();
+        assert!(peer.bearer_token.is_none());
+
+        let json = r#"{"id":"p","url":"https://p.com","public_key":"AAAA","bearer_token":"tok"}"#;
+        let peer: PeerConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(peer.bearer_token.as_deref(), Some("tok"));
     }
 }

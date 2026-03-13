@@ -143,15 +143,16 @@ pub async fn consolidate(
         all_tags.sort();
         all_tags.dedup();
 
-        // Delete originals
-        for &idx in cluster {
-            manager.forget(&entries[idx].id)?;
-        }
-
-        // Store the merged memory
+        // Store the merged memory BEFORE deleting originals.
+        // If remember() fails, originals remain intact — no data loss.
         manager
             .remember(merged_content, kind, agent_scope, all_tags)
             .await?;
+
+        // Delete originals (safe: merged replacement is already persisted)
+        for &idx in cluster {
+            manager.forget(&entries[idx].id)?;
+        }
 
         report.clusters_merged += 1;
     }
