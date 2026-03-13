@@ -37,7 +37,6 @@ pub struct HeartbeatConfig {
     pub agent: String,
 
     // ── Context sources ─────────────────────────────────────────────
-
     /// Include pending notifications from background schedules.
     #[serde(default = "default_true")]
     pub check_notifications: bool,
@@ -51,7 +50,6 @@ pub struct HeartbeatConfig {
     pub check_memory: bool,
 
     // ── User-defined goals ──────────────────────────────────────────
-
     /// Natural-language objectives the agent should consider each beat.
     ///
     /// Examples:
@@ -62,7 +60,6 @@ pub struct HeartbeatConfig {
     pub goals: Vec<String>,
 
     // ── Autonomy constraints ────────────────────────────────────────
-
     /// Whether the heartbeat agent may proactively send channel messages
     /// (e.g., Telegram). When `false`, findings are stored as notifications
     /// only.
@@ -80,7 +77,6 @@ pub struct HeartbeatConfig {
     pub can_consolidate_memory: bool,
 
     // ── Runtime state ───────────────────────────────────────────────
-
     /// Timestamp of the last heartbeat tick (set by the runtime).
     #[serde(default)]
     pub last_beat_at: Option<DateTime<Utc>>,
@@ -142,10 +138,7 @@ mod tests {
         hb.enabled = true;
         hb.interval_minutes = 15;
         hb.agent = "monitor".into();
-        hb.goals = vec![
-            "Check CI pipelines".into(),
-            "Summarize new research".into(),
-        ];
+        hb.goals = vec!["Check CI pipelines".into(), "Summarize new research".into()];
         hb.can_consolidate_memory = true;
 
         let toml_str = toml::to_string(&hb).unwrap();

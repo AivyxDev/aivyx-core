@@ -358,13 +358,9 @@ impl Tool for NexusInteractTool {
             ));
         }
 
-        let post_id: Option<PostId> = input["post_id"]
-            .as_str()
-            .and_then(|s| s.parse().ok());
+        let post_id: Option<PostId> = input["post_id"].as_str().and_then(|s| s.parse().ok());
 
-        let message = input["message"]
-            .as_str()
-            .map(|m| truncate_message(m));
+        let message = input["message"].as_str().map(|m| truncate_message(m));
 
         // Redaction check on message if present
         if let Some(ref msg) = message {
@@ -467,23 +463,16 @@ impl Tool for NexusBrowseTool {
     }
 
     async fn execute(&self, input: serde_json::Value) -> Result<serde_json::Value> {
-        let limit = input["limit"]
-            .as_u64()
-            .unwrap_or(20)
-            .min(50) as usize;
+        let limit = input["limit"].as_u64().unwrap_or(20).min(50) as usize;
 
         let kind_filter = input["kind"]
             .as_str()
             .and_then(|k| parse_post_kind(Some(k)).ok())
             .map(|k| vec![k]);
 
-        let tag_filter = input["tag"]
-            .as_str()
-            .map(|t| vec![t.to_string()]);
+        let tag_filter = input["tag"].as_str().map(|t| vec![t.to_string()]);
 
-        let author_filter = input["author"]
-            .as_str()
-            .map(|a| vec![a.to_string()]);
+        let author_filter = input["author"].as_str().map(|a| vec![a.to_string()]);
 
         let query = FeedQuery {
             viewer: Some(self.ctx.agent_id.clone()),
@@ -516,13 +505,11 @@ impl Tool for NexusBrowseTool {
                 if let Some(ref profile) = entry.author_profile {
                     post_json["author_display_name"] =
                         serde_json::Value::String(profile.display_name.clone());
-                    post_json["author_role"] =
-                        serde_json::Value::String(profile.role.clone());
+                    post_json["author_role"] = serde_json::Value::String(profile.role.clone());
                 }
 
                 if let Some(ref parent) = entry.post.in_reply_to {
-                    post_json["in_reply_to"] =
-                        serde_json::Value::String(parent.to_string());
+                    post_json["in_reply_to"] = serde_json::Value::String(parent.to_string());
                 }
 
                 post_json
@@ -689,9 +676,7 @@ impl Tool for NexusProfileTool {
     }
 
     async fn execute(&self, input: serde_json::Value) -> Result<serde_json::Value> {
-        let agent_id = input["agent_id"]
-            .as_str()
-            .unwrap_or(&self.ctx.agent_id);
+        let agent_id = input["agent_id"].as_str().unwrap_or(&self.ctx.agent_id);
 
         let profile = self.ctx.store.load_profile(agent_id)?;
         let reputation = self.ctx.store.load_reputation(agent_id)?;
@@ -861,10 +846,7 @@ impl Tool for NexusUpdateBioTool {
 
 /// Register all Nexus tools into a `ToolRegistry`.
 #[cfg(feature = "nexus")]
-pub fn register_nexus_tools(
-    registry: &mut aivyx_core::ToolRegistry,
-    ctx: Arc<NexusContext>,
-) {
+pub fn register_nexus_tools(registry: &mut aivyx_core::ToolRegistry, ctx: Arc<NexusContext>) {
     registry.register(Box::new(NexusPublishTool::new(Arc::clone(&ctx))));
     registry.register(Box::new(NexusReplyTool::new(Arc::clone(&ctx))));
     registry.register(Box::new(NexusInteractTool::new(Arc::clone(&ctx))));
@@ -887,9 +869,7 @@ fn parse_post_kind(kind: Option<&str>) -> Result<PostKind> {
         Some("status_update") => Ok(PostKind::StatusUpdate),
         Some("skill_share") => Ok(PostKind::SkillShare),
         Some("reflection") => Ok(PostKind::Reflection),
-        Some(other) => Err(AivyxError::Agent(format!(
-            "unknown post kind: '{other}'"
-        ))),
+        Some(other) => Err(AivyxError::Agent(format!("unknown post kind: '{other}'"))),
         None => Err(AivyxError::Agent("missing post kind".into())),
     }
 }
@@ -943,7 +923,7 @@ fn truncate_message(msg: &str) -> String {
 
 #[cfg(feature = "nexus")]
 fn enforce_tag_limits(tags: Vec<String>) -> Vec<String> {
-    use aivyx_nexus::types::{MAX_TAGS_PER_POST, MAX_TAG_LEN};
+    use aivyx_nexus::types::{MAX_TAG_LEN, MAX_TAGS_PER_POST};
     tags.into_iter()
         .take(MAX_TAGS_PER_POST)
         .map(|t| {
@@ -1134,10 +1114,7 @@ mod tests {
 
         // Verify profile is stored
         let profile = NexusProfileTool::new(ctx);
-        let loaded = profile
-            .execute(serde_json::json!({}))
-            .await
-            .unwrap();
+        let loaded = profile.execute(serde_json::json!({})).await.unwrap();
         assert_eq!(loaded["bio"], "I build things.");
         assert_eq!(loaded["skills"][0], "rust");
     }
@@ -1169,17 +1146,25 @@ mod tests {
             .unwrap();
 
         assert_eq!(result["count"], 1);
-        assert!(result["results"][0]["content"]
-            .as_str()
-            .unwrap()
-            .contains("memory safety"));
+        assert!(
+            result["results"][0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("memory safety")
+        );
     }
 
     #[test]
     fn parse_post_kind_all_variants() {
         for kind in [
-            "thought", "discovery", "hypothesis", "question",
-            "artifact", "status_update", "skill_share", "reflection",
+            "thought",
+            "discovery",
+            "hypothesis",
+            "question",
+            "artifact",
+            "status_update",
+            "skill_share",
+            "reflection",
         ] {
             assert!(parse_post_kind(Some(kind)).is_ok(), "failed for: {kind}");
         }
@@ -1190,7 +1175,10 @@ mod tests {
     #[test]
     fn parse_interaction_kind_all_variants() {
         for kind in ["endorse", "challenge", "collaborate", "delegate", "thank"] {
-            assert!(parse_interaction_kind(Some(kind)).is_ok(), "failed for: {kind}");
+            assert!(
+                parse_interaction_kind(Some(kind)).is_ok(),
+                "failed for: {kind}"
+            );
         }
         assert!(parse_interaction_kind(Some("invalid")).is_err());
     }

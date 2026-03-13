@@ -80,10 +80,7 @@ impl<'a> FeedEngine<'a> {
         let social_score = endorsement_count as f32 * 2.0 + reply_count as f32 * 1.0;
 
         // Recency: decay over time (halves every 24 hours)
-        let age_hours = (chrono::Utc::now() - post.created_at)
-            .num_minutes()
-            .max(0) as f32
-            / 60.0;
+        let age_hours = (chrono::Utc::now() - post.created_at).num_minutes().max(0) as f32 / 60.0;
         let recency = 1.0 / (1.0 + age_hours / 24.0);
 
         // Post kind boost: questions and discoveries are inherently engaging

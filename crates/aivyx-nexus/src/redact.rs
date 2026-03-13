@@ -55,30 +55,54 @@ static DEFAULT_PATTERNS: LazyLock<Vec<(&str, &str)>> = LazyLock::new(|| {
         ("GitHub token", r"(?:ghp|gho|ghu|ghs|ghr)_[a-zA-Z0-9]{36,}"),
         ("GitLab token", r#"glpat-[a-zA-Z0-9\-]{20,}"#),
         ("Slack token", r#"xox[bporas]-[a-zA-Z0-9\-]{10,}"#),
-        ("Discord token", r#"[MN][A-Za-z\d]{23,}\.[\w-]{6}\.[\w-]{27,}"#),
-        ("Generic API key pattern", r#"(?i)api[_-]?key\s*[:=]\s*['"]?[a-zA-Z0-9_\-]{20,}"#),
-        ("Generic secret pattern", r#"(?i)(?:secret|password|passwd|pwd)\s*[:=]\s*['"]?[^\s'"]{8,}"#),
-
+        (
+            "Discord token",
+            r#"[MN][A-Za-z\d]{23,}\.[\w-]{6}\.[\w-]{27,}"#,
+        ),
+        (
+            "Generic API key pattern",
+            r#"(?i)api[_-]?key\s*[:=]\s*['"]?[a-zA-Z0-9_\-]{20,}"#,
+        ),
+        (
+            "Generic secret pattern",
+            r#"(?i)(?:secret|password|passwd|pwd)\s*[:=]\s*['"]?[^\s'"]{8,}"#,
+        ),
         // Private keys
-        ("PEM private key", r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"),
-        ("Ed25519 private key bytes", r#"(?i)private[_\s]?key\s*[:=]\s*['"]?[A-Za-z0-9+/=]{40,}"#),
-
+        (
+            "PEM private key",
+            r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----",
+        ),
+        (
+            "Ed25519 private key bytes",
+            r#"(?i)private[_\s]?key\s*[:=]\s*['"]?[A-Za-z0-9+/=]{40,}"#,
+        ),
         // Bearer / auth tokens
         ("Bearer token", r#"(?i)bearer\s+[a-zA-Z0-9_\-\.]{20,}"#),
         ("Basic auth", r#"(?i)basic\s+[A-Za-z0-9+/=]{10,}"#),
-
         // Connection strings
-        ("Database URL", r#"(?i)(?:postgres|mysql|mongodb|redis)://[^\s]{10,}"#),
-        ("Connection string", r#"(?i)(?:server|host)\s*=\s*[^;\s]+;\s*(?:database|user|password)\s*="#),
-
+        (
+            "Database URL",
+            r#"(?i)(?:postgres|mysql|mongodb|redis)://[^\s]{10,}"#,
+        ),
+        (
+            "Connection string",
+            r#"(?i)(?:server|host)\s*=\s*[^;\s]+;\s*(?:database|user|password)\s*="#,
+        ),
         // JWT tokens (three base64 segments joined by dots)
-        ("JWT token", r#"eyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}"#),
-
+        (
+            "JWT token",
+            r#"eyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}"#,
+        ),
         // SSH keys
-        ("SSH private key path", r#"(?i)(?:id_rsa|id_ed25519|id_ecdsa)(?:\s|$|['"])"#),
-
+        (
+            "SSH private key path",
+            r#"(?i)(?:id_rsa|id_ed25519|id_ecdsa)(?:\s|$|['"])"#,
+        ),
         // Hex-encoded secrets (32+ byte keys)
-        ("Hex secret (64+ chars)", r#"(?i)(?:key|secret|token|salt)\s*[:=]\s*['"]?[0-9a-fA-F]{64,}"#),
+        (
+            "Hex secret (64+ chars)",
+            r#"(?i)(?:key|secret|token|salt)\s*[:=]\s*['"]?[0-9a-fA-F]{64,}"#,
+        ),
     ]
 });
 
@@ -221,8 +245,7 @@ mod tests {
     #[test]
     fn blocks_connection_string() {
         let f = filter();
-        let result =
-            f.check("Server=myserver;Database=mydb;User=admin;Password=secret123");
+        let result = f.check("Server=myserver;Database=mydb;User=admin;Password=secret123");
         assert!(result.is_blocked());
     }
 
@@ -266,7 +289,10 @@ mod tests {
         );
         match result {
             RedactResult::Blocked { reasons } => {
-                assert!(reasons.len() >= 2, "expected multiple reasons, got: {reasons:?}");
+                assert!(
+                    reasons.len() >= 2,
+                    "expected multiple reasons, got: {reasons:?}"
+                );
             }
             RedactResult::Clean => panic!("expected blocked"),
         }

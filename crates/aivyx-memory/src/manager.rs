@@ -287,7 +287,8 @@ impl MemoryManager {
             self.reinforce_triple(&existing_id, reinforce_boost)?;
             Ok((existing_id, false))
         } else {
-            let id = self.add_triple(subject, predicate, object, agent_scope, confidence, source)?;
+            let id =
+                self.add_triple(subject, predicate, object, agent_scope, confidence, source)?;
             Ok((id, true))
         }
     }
@@ -307,7 +308,9 @@ impl MemoryManager {
             // Confidence values changed — rebuild so graph edges are accurate
             self.graph = Some(KnowledgeGraph::build(&self.store, &self.master_key)?);
         }
-        debug!("Triple decay: {decayed} decayed, {pruned} pruned (factor={factor}, min={min_confidence})");
+        debug!(
+            "Triple decay: {decayed} decayed, {pruned} pruned (factor={factor}, min={min_confidence})"
+        );
         Ok((decayed, pruned))
     }
 
@@ -341,12 +344,18 @@ impl MemoryManager {
         rating: crate::notification::Rating,
         feedback: Option<String>,
     ) -> Result<OutcomeRecord> {
-        let record = self.store.rate_outcome(id, rating, feedback, &self.master_key)?;
+        let record = self
+            .store
+            .rate_outcome(id, rating, feedback, &self.master_key)?;
         debug!(
             "Rated outcome {} as {:?}{}",
             id,
             record.human_rating,
-            record.human_feedback.as_ref().map(|f| format!(" — {f}")).unwrap_or_default()
+            record
+                .human_feedback
+                .as_ref()
+                .map(|f| format!(" — {f}"))
+                .unwrap_or_default()
         );
         Ok(record)
     }
@@ -449,10 +458,7 @@ impl MemoryManager {
     }
 
     /// Load a single pattern by ID.
-    pub fn get_pattern(
-        &self,
-        id: &PatternId,
-    ) -> Result<Option<crate::pattern::WorkflowPattern>> {
+    pub fn get_pattern(&self, id: &PatternId) -> Result<Option<crate::pattern::WorkflowPattern>> {
         self.store.load_pattern(id, &self.master_key)
     }
 

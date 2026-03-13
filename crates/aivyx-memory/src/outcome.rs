@@ -261,7 +261,9 @@ mod tests {
     #[test]
     fn outcome_record_new_has_no_rating() {
         let record = OutcomeRecord::new(
-            OutcomeSource::ToolCall { tool_name: "shell".into() },
+            OutcomeSource::ToolCall {
+                tool_name: "shell".into(),
+            },
             true,
             "ok".into(),
             100,
@@ -276,7 +278,9 @@ mod tests {
     #[test]
     fn outcome_record_with_rating_and_feedback() {
         let record = OutcomeRecord::new(
-            OutcomeSource::ToolCall { tool_name: "shell".into() },
+            OutcomeSource::ToolCall {
+                tool_name: "shell".into(),
+            },
             true,
             "ok".into(),
             100,
@@ -294,7 +298,9 @@ mod tests {
     #[test]
     fn outcome_record_serde_with_rating() {
         let record = OutcomeRecord::new(
-            OutcomeSource::ToolCall { tool_name: "shell".into() },
+            OutcomeSource::ToolCall {
+                tool_name: "shell".into(),
+            },
             true,
             "ok".into(),
             100,
@@ -307,7 +313,10 @@ mod tests {
         let json = serde_json::to_string(&record).unwrap();
         let restored: OutcomeRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.human_rating, Some(Rating::Partial));
-        assert_eq!(restored.human_feedback.as_deref(), Some("Needs improvement"));
+        assert_eq!(
+            restored.human_feedback.as_deref(),
+            Some("Needs improvement")
+        );
     }
 
     #[test]

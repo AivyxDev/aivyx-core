@@ -183,7 +183,9 @@ impl NexusStore {
 
         let mut results = Vec::new();
 
-        let iter = feed.iter().map_err(|e| AivyxError::Other(format!("feed iter: {e}")))?;
+        let iter = feed
+            .iter()
+            .map_err(|e| AivyxError::Other(format!("feed iter: {e}")))?;
 
         for entry in iter {
             if results.len() >= limit {
@@ -206,12 +208,10 @@ impl NexusStore {
 
             // Load the actual post
             let post = match posts_table.get(post_id_str) {
-                Ok(Some(value)) => {
-                    match serde_json::from_slice::<NexusPost>(value.value()) {
-                        Ok(p) => p,
-                        Err(_) => continue,
-                    }
-                }
+                Ok(Some(value)) => match serde_json::from_slice::<NexusPost>(value.value()) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                },
                 _ => continue,
             };
 
@@ -394,11 +394,7 @@ impl NexusStore {
     }
 
     /// Count interactions of a specific kind on a post.
-    pub fn count_post_interactions(
-        &self,
-        post_id: &PostId,
-        kind: InteractionKind,
-    ) -> Result<u32> {
+    pub fn count_post_interactions(&self, post_id: &PostId, kind: InteractionKind) -> Result<u32> {
         let prefix = format!("{post_id}:");
         let txn = self
             .db
@@ -421,9 +417,7 @@ impl NexusStore {
             // Extract interaction_id from "post_id:interaction_id"
             if let Some(int_id_str) = key.strip_prefix(prefix.as_str()) {
                 if let Ok(Some(value)) = int_table.get(int_id_str) {
-                    if let Ok(interaction) =
-                        serde_json::from_slice::<Interaction>(value.value())
-                    {
+                    if let Ok(interaction) = serde_json::from_slice::<Interaction>(value.value()) {
                         if interaction.kind == kind {
                             count += 1;
                         }
@@ -522,7 +516,11 @@ impl NexusStore {
             }
         }
 
-        reps.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        reps.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         Ok(reps)
     }
 

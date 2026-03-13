@@ -27,9 +27,9 @@ pub use config::{
     AivyxConfig, BackupConfig, BillingConfig, DefaultQuotas, GroupRoleMappingConfig,
     OidcProviderConfig, SsoConfig, TenantsConfig, TriggerConfig,
 };
-pub use heartbeat::HeartbeatConfig;
 pub use dirs::AivyxDirs;
 pub use embedding::EmbeddingConfig;
+pub use heartbeat::HeartbeatConfig;
 pub use mcp::{McpAuthConfig, McpAuthMethod, McpServerConfig, McpTransport};
 pub use memory::MemoryConfig;
 pub use nexus::NexusConfig;

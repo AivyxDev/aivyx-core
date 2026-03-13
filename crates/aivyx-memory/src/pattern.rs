@@ -172,7 +172,9 @@ pub fn mine_patterns(outcomes: &[OutcomeRecord], config: &MiningConfig) -> Vec<W
     // subsequences of a longer qualifying pattern
     let keys: Vec<String> = candidates.iter().map(|(k, _)| k.clone()).collect();
     candidates.retain(|(key, _)| {
-        !keys.iter().any(|other| other.len() > key.len() && other.contains(key.as_str()))
+        !keys
+            .iter()
+            .any(|other| other.len() > key.len() && other.contains(key.as_str()))
     });
 
     // Phase 4: sort by occurrence count descending, take top N
@@ -292,11 +294,11 @@ what matters, not the exact parameters.
 /// stop words and very short tokens.
 fn extract_keywords(text: &str) -> Vec<String> {
     const STOP_WORDS: &[&str] = &[
-        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has",
-        "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "shall",
-        "can", "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "about",
-        "that", "this", "it", "its", "and", "or", "but", "not", "no", "if", "then", "than",
-        "so", "up", "out", "all", "just", "also", "very", "too", "any", "each", "every",
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+        "do", "does", "did", "will", "would", "could", "should", "may", "might", "shall", "can",
+        "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "about", "that",
+        "this", "it", "its", "and", "or", "but", "not", "no", "if", "then", "than", "so", "up",
+        "out", "all", "just", "also", "very", "too", "any", "each", "every",
     ];
 
     text.to_lowercase()
@@ -309,8 +311,8 @@ fn extract_keywords(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aivyx_core::OutcomeId;
     use crate::outcome::OutcomeSource;
+    use aivyx_core::OutcomeId;
 
     fn make_outcome(
         tools: &[&str],

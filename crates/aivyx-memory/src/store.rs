@@ -231,9 +231,10 @@ impl MemoryStore {
         master_key: &MasterKey,
     ) -> Result<KnowledgeTriple> {
         let key = format!("triple:{id}");
-        let bytes = self.store.get(&key, master_key)?.ok_or_else(|| {
-            AivyxError::Other(format!("triple not found: {id}"))
-        })?;
+        let bytes = self
+            .store
+            .get(&key, master_key)?
+            .ok_or_else(|| AivyxError::Other(format!("triple not found: {id}")))?;
         let mut triple: KnowledgeTriple = serde_json::from_slice(&bytes)?;
         triple.confidence = (triple.confidence + boost).min(1.0);
         triple.reinforce_count += 1;
@@ -308,11 +309,7 @@ impl MemoryStore {
     // -----------------------------------------------------------------------
 
     /// Save a workflow pattern.
-    pub fn save_pattern(
-        &self,
-        pattern: &WorkflowPattern,
-        master_key: &MasterKey,
-    ) -> Result<()> {
+    pub fn save_pattern(&self, pattern: &WorkflowPattern, master_key: &MasterKey) -> Result<()> {
         let key = format!("pattern:{}", pattern.id);
         let data = serde_json::to_vec(pattern).map_err(AivyxError::Serialization)?;
         self.store.put(&key, &data, master_key)
@@ -426,9 +423,10 @@ impl MemoryStore {
         master_key: &MasterKey,
     ) -> Result<OutcomeRecord> {
         let key = format!("outcome:{id}");
-        let bytes = self.store.get(&key, master_key)?.ok_or_else(|| {
-            AivyxError::Other(format!("outcome not found: {id}"))
-        })?;
+        let bytes = self
+            .store
+            .get(&key, master_key)?
+            .ok_or_else(|| AivyxError::Other(format!("outcome not found: {id}")))?;
         let mut record: OutcomeRecord = serde_json::from_slice(&bytes)?;
         record.human_rating = Some(rating);
         record.human_feedback = feedback;

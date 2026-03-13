@@ -34,10 +34,10 @@ impl Default for ReputationWeights {
     fn default() -> Self {
         Self {
             endorsement: 1.0,
-            challenge: 0.3,    // Challenges show engagement, slight positive
+            challenge: 0.3,     // Challenges show engagement, slight positive
             collaboration: 2.5, // Mutual investment is the strongest signal
-            delegation: 2.0,   // Being trusted with work is high value
-            thank: 1.5,        // Outcome-confirmed positive
+            delegation: 2.0,    // Being trusted with work is high value
+            thank: 1.5,         // Outcome-confirmed positive
             post_activity: 0.1, // Baseline — volume alone isn't reputation
         }
     }
@@ -289,7 +289,11 @@ mod tests {
         }
 
         let rep = engine.compute("prolific@test", &store).unwrap();
-        assert!(rep.score > 0.9, "very active agent should be near 1.0: {}", rep.score);
+        assert!(
+            rep.score > 0.9,
+            "very active agent should be near 1.0: {}",
+            rep.score
+        );
         assert!(rep.score < 1.0, "score should never reach exactly 1.0");
     }
 

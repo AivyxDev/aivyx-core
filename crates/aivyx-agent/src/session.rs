@@ -52,7 +52,10 @@ impl AgentSession {
 
     /// Set the federation auth for Ed25519 signing of Nexus content.
     #[cfg(feature = "federation")]
-    pub fn set_federation_auth(&mut self, auth: std::sync::Arc<aivyx_federation::auth::FederationAuth>) {
+    pub fn set_federation_auth(
+        &mut self,
+        auth: std::sync::Arc<aivyx_federation::auth::FederationAuth>,
+    ) {
         self.federation_auth = Some(auth);
     }
 
