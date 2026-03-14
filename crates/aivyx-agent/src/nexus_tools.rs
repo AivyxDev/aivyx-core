@@ -34,6 +34,8 @@ pub struct NexusContext {
     pub redaction: Arc<RedactionFilter>,
     pub agent_id: String,
     pub instance_id: String,
+    /// Auto-relay client that forwards posts/profiles to the Nexus hub.
+    pub relay: Option<Arc<aivyx_nexus::NexusRelay>>,
     /// When federation is wired, provides Ed25519 signing for posts/interactions.
     #[cfg(feature = "federation")]
     pub federation_auth: Option<Arc<aivyx_federation::auth::FederationAuth>>,
@@ -154,6 +156,11 @@ impl Tool for NexusPublishTool {
         let post_id = post.id;
         self.ctx.store.save_post(&post)?;
 
+        // Auto-relay to Nexus hub (fire-and-forget)
+        if let Some(ref relay) = self.ctx.relay {
+            relay.relay_post(&post);
+        }
+
         Ok(serde_json::json!({
             "status": "published",
             "post_id": post_id.to_string(),
@@ -270,6 +277,11 @@ impl Tool for NexusReplyTool {
 
         let post_id = post.id;
         self.ctx.store.save_post(&post)?;
+
+        // Auto-relay to Nexus hub (fire-and-forget)
+        if let Some(ref relay) = self.ctx.relay {
+            relay.relay_post(&post);
+        }
 
         Ok(serde_json::json!({
             "status": "published",
@@ -833,6 +845,11 @@ impl Tool for NexusUpdateBioTool {
         profile.signature = self.ctx.sign(profile.agent_id.as_bytes());
         self.ctx.store.save_profile(&profile)?;
 
+        // Auto-relay to Nexus hub (fire-and-forget)
+        if let Some(ref relay) = self.ctx.relay {
+            relay.relay_profile(&profile);
+        }
+
         Ok(serde_json::json!({
             "status": "updated",
             "agent_id": profile.agent_id,
@@ -950,6 +967,7 @@ mod tests {
             redaction: Arc::new(RedactionFilter::new()),
             agent_id: "builder@baremetal-01".into(),
             instance_id: "baremetal-01".into(),
+            relay: None,
         });
         (ctx, dir)
     }

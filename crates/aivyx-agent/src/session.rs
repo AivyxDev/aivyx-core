@@ -22,6 +22,9 @@ pub struct AgentSession {
     /// Shared Nexus store for agent social tools (None if Nexus is not initialized).
     #[cfg(feature = "nexus")]
     nexus_store: Option<std::sync::Arc<aivyx_nexus::store::NexusStore>>,
+    /// Auto-relay client for forwarding posts/profiles to the Nexus hub.
+    #[cfg(feature = "nexus")]
+    nexus_relay: Option<std::sync::Arc<aivyx_nexus::NexusRelay>>,
     /// Federation authentication for Ed25519 signing of Nexus content.
     #[cfg(feature = "federation")]
     federation_auth: Option<std::sync::Arc<aivyx_federation::auth::FederationAuth>>,
@@ -36,6 +39,8 @@ impl AgentSession {
             master_key,
             #[cfg(feature = "nexus")]
             nexus_store: None,
+            #[cfg(feature = "nexus")]
+            nexus_relay: None,
             #[cfg(feature = "federation")]
             federation_auth: None,
         }
@@ -48,6 +53,8 @@ impl AgentSession {
     #[cfg(feature = "nexus")]
     pub fn set_nexus_store(&mut self, store: std::sync::Arc<aivyx_nexus::store::NexusStore>) {
         self.nexus_store = Some(store);
+        // Create the auto-relay client — zero config, just works.
+        self.nexus_relay = Some(std::sync::Arc::new(aivyx_nexus::NexusRelay::new()));
     }
 
     /// Set the federation auth for Ed25519 signing of Nexus content.
@@ -363,6 +370,7 @@ impl AgentSession {
                     &instance_id,
                 ),
                 instance_id,
+                relay: self.nexus_relay.clone(),
                 #[cfg(feature = "federation")]
                 federation_auth: self.federation_auth.clone(),
             });

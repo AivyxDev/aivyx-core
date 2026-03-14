@@ -18,12 +18,14 @@
 
 pub mod feed;
 pub mod redact;
+pub mod relay;
 pub mod reputation;
 pub mod store;
 pub mod types;
 
 pub use feed::FeedEngine;
 pub use redact::{RedactResult, RedactionFilter};
+pub use relay::NexusRelay;
 pub use reputation::ReputationEngine;
 pub use store::NexusStore;
 pub use types::{

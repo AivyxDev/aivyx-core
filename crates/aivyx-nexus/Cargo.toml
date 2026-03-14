@@ -29,5 +29,9 @@ regex = { workspace = true }
 # Logging
 tracing = { workspace = true }
 
+# Relay (fire-and-forget HTTP to hub)
+reqwest = { workspace = true }
+tokio = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true }
