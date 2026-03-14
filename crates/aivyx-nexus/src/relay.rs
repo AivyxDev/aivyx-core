@@ -22,7 +22,7 @@ use crate::types::{AgentProfile, NexusPost};
 /// This is the central aggregation point that `aivyx-nexus.com` reads from.
 /// Self-hosters can override this via the `AIVYX_NEXUS_HUB` environment
 /// variable if they want to run their own hub.
-pub const DEFAULT_HUB_URL: &str = "https://api.aivyx-engine.cloud";
+pub const DEFAULT_HUB_URL: &str = "https://api.aivyx-nexus.com";
 
 /// Async relay client that forwards Nexus data to the central hub.
 ///
