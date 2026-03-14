@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use secrecy::{ExposeSecret, SecretString};
 use tokio::sync::mpsc;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use aivyx_core::{AivyxError, Result};
 
@@ -42,7 +42,12 @@ impl OpenAICompatibleProvider {
         let api_url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
         Self {
             client: Client::builder()
-                .timeout(Duration::from_secs(timeout_secs))
+                // Use read_timeout instead of timeout: `timeout()` is a total
+                // request lifetime limit which kills long-running LLM inference
+                // (e.g. 32B models taking 300-500s). `read_timeout()` resets on
+                // each received chunk, so streaming inference stays alive as
+                // long as tokens are being generated.
+                .read_timeout(Duration::from_secs(timeout_secs))
                 .connect_timeout(Duration::from_secs(10))
                 .pool_max_idle_per_host(4)
                 .pool_idle_timeout(Duration::from_secs(90))
@@ -194,12 +199,27 @@ impl OpenAICompatibleProvider {
         if let Some(tcs) = msg["tool_calls"].as_array() {
             for tc in tcs {
                 let function = &tc["function"];
+                let id = tc["id"].as_str().filter(|s| !s.is_empty()).ok_or_else(|| {
+                    AivyxError::LlmProvider("tool_call missing 'id' field".into())
+                })?;
+                let name = function["name"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| {
+                        AivyxError::LlmProvider("tool_call missing 'function.name' field".into())
+                    })?;
                 let args_str = function["arguments"].as_str().unwrap_or("{}");
-                let arguments: serde_json::Value =
-                    serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
+                let arguments: serde_json::Value = serde_json::from_str(args_str).map_err(|e| {
+                    warn!(
+                        tool = %name,
+                        raw_args = %args_str,
+                        "failed to parse tool arguments"
+                    );
+                    AivyxError::LlmProvider(format!("malformed tool arguments for '{name}': {e}"))
+                })?;
                 tool_calls.push(ToolCall {
-                    id: tc["id"].as_str().unwrap_or_default().to_string(),
-                    name: function["name"].as_str().unwrap_or_default().to_string(),
+                    id: id.to_string(),
+                    name: name.to_string(),
                     arguments,
                 });
             }
@@ -407,7 +427,16 @@ impl LlmProvider for OpenAICompatibleProvider {
         for idx in indices {
             if let Some((id, name, args_str)) = tc_index_map.remove(&idx) {
                 let arguments: serde_json::Value =
-                    serde_json::from_str(&args_str).unwrap_or(serde_json::json!({}));
+                    serde_json::from_str(&args_str).map_err(|e| {
+                        warn!(
+                            tool = %name,
+                            raw_args = %args_str,
+                            "failed to parse streamed tool arguments"
+                        );
+                        AivyxError::LlmProvider(format!(
+                            "malformed tool arguments for '{name}': {e}"
+                        ))
+                    })?;
                 tool_calls.push(ToolCall {
                     id,
                     name,

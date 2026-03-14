@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use secrecy::{ExposeSecret, SecretString};
 use tokio::sync::mpsc;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use aivyx_core::{AivyxError, Result};
 
@@ -166,9 +166,26 @@ impl ClaudeProvider {
                         }
                     }
                     Some("tool_use") => {
+                        let id =
+                            block["id"]
+                                .as_str()
+                                .filter(|s| !s.is_empty())
+                                .ok_or_else(|| {
+                                    AivyxError::LlmProvider(
+                                        "tool_use block missing 'id' field".into(),
+                                    )
+                                })?;
+                        let name = block["name"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                            .ok_or_else(|| {
+                                AivyxError::LlmProvider(
+                                    "tool_use block missing 'name' field".into(),
+                                )
+                            })?;
                         tool_calls.push(ToolCall {
-                            id: block["id"].as_str().unwrap_or_default().to_string(),
-                            name: block["name"].as_str().unwrap_or_default().to_string(),
+                            id: id.to_string(),
+                            name: name.to_string(),
                             arguments: block["input"].clone(),
                         });
                     }
@@ -348,8 +365,17 @@ impl LlmProvider for ClaudeProvider {
                             "content_block_stop" => {
                                 if !current_tool_name.is_empty() {
                                     let arguments: serde_json::Value =
-                                        serde_json::from_str(&current_tool_input)
-                                            .unwrap_or(serde_json::json!({}));
+                                        serde_json::from_str(&current_tool_input).map_err(|e| {
+                                            warn!(
+                                                tool = %current_tool_name,
+                                                raw_input = %current_tool_input,
+                                                "failed to parse streamed tool arguments"
+                                            );
+                                            AivyxError::LlmProvider(format!(
+                                                "malformed tool arguments for '{}': {e}",
+                                                current_tool_name
+                                            ))
+                                        })?;
                                     tool_calls.push(ToolCall {
                                         id: std::mem::take(&mut current_tool_id),
                                         name: std::mem::take(&mut current_tool_name),

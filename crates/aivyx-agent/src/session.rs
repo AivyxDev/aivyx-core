@@ -93,8 +93,56 @@ impl AgentSession {
         self.create_agent_from_profile(&profile).await
     }
 
+    /// Load a profile by name and create an agent with a shared MemoryManager.
+    ///
+    /// Use this from the server to avoid per-agent `EncryptedStore` lock
+    /// contention when the server already holds a shared MemoryManager.
+    #[cfg(feature = "memory")]
+    pub async fn create_agent_with_shared_memory(
+        &self,
+        profile_name: &str,
+        shared_memory: std::sync::Arc<tokio::sync::Mutex<aivyx_memory::MemoryManager>>,
+    ) -> Result<Agent> {
+        let profile_path = self.dirs.agents_dir().join(format!("{profile_name}.toml"));
+        if !profile_path.exists() {
+            return Err(AivyxError::Config(format!(
+                "agent profile not found: {profile_name} (expected at {})",
+                profile_path.display()
+            )));
+        }
+
+        let profile = AgentProfile::load(&profile_path)?;
+        self.create_agent_for_server(&profile, shared_memory).await
+    }
+
     /// Create an agent from an already-loaded profile.
     pub async fn create_agent_from_profile(&self, profile: &AgentProfile) -> Result<Agent> {
+        self.create_agent_inner(profile, None).await
+    }
+
+    /// Create an agent for server use with a shared MemoryManager.
+    ///
+    /// When the server already holds a shared `MemoryManager`, pass it here
+    /// to avoid opening a redundant `EncryptedStore` (which causes "Database
+    /// already open" lock contention). Memory tools are registered using the
+    /// shared manager instead.
+    #[cfg(feature = "memory")]
+    pub async fn create_agent_for_server(
+        &self,
+        profile: &AgentProfile,
+        shared_memory: std::sync::Arc<tokio::sync::Mutex<aivyx_memory::MemoryManager>>,
+    ) -> Result<Agent> {
+        self.create_agent_inner(profile, Some(shared_memory)).await
+    }
+
+    /// Internal agent creation with optional shared memory manager.
+    async fn create_agent_inner(
+        &self,
+        profile: &AgentProfile,
+        #[cfg(feature = "memory")] shared_memory: Option<
+            std::sync::Arc<tokio::sync::Mutex<aivyx_memory::MemoryManager>>,
+        >,
+    ) -> Result<Agent> {
         // Create LLM provider (per-agent override or global default).
         // Scope the EncryptedStore so its redb lock is released before the
         // memory manager opens its own handle on the same database.
@@ -114,9 +162,17 @@ impl AgentSession {
         let capabilities = Self::build_capabilities(&profile.capabilities, agent_id);
 
         // Wire memory tools into the registry before Agent::new() consumes it.
-        // Memory manager creation must happen early so tools can reference it.
+        // If a shared memory manager was provided (server mode), use it instead
+        // of creating a per-agent one (which would lock the store).
         #[cfg(feature = "memory")]
-        let memory_manager = if let Some(ref embedding_config) = self.config.embedding {
+        let memory_manager = if let Some(shared_mgr) = shared_memory {
+            aivyx_memory::register_memory_tools(&mut tools, shared_mgr.clone(), agent_id);
+            tracing::info!(
+                "Memory enabled for agent '{}' (shared server manager)",
+                profile.name,
+            );
+            Some(shared_mgr)
+        } else if let Some(ref embedding_config) = self.config.embedding {
             match self.create_memory_manager(embedding_config) {
                 Ok(mgr) => {
                     let arc_mgr = std::sync::Arc::new(tokio::sync::Mutex::new(mgr));

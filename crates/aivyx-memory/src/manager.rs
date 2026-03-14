@@ -523,6 +523,16 @@ impl MemoryManager {
         out
     }
 
+    /// List all stored memory IDs.
+    pub fn list_memories(&self) -> Result<Vec<MemoryId>> {
+        self.store.list_memories()
+    }
+
+    /// Load a memory entry by ID.
+    pub fn load_memory(&self, id: &MemoryId) -> Result<Option<MemoryEntry>> {
+        self.store.load_memory(id, &self.master_key)
+    }
+
     /// Get memory subsystem statistics.
     pub fn stats(&self) -> Result<MemoryStats> {
         Ok(MemoryStats {

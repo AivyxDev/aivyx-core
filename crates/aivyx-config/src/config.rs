@@ -3,6 +3,7 @@ use std::path::Path;
 
 use aivyx_core::{AivyxError, Result};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::autonomy_policy::AutonomyPolicy;
 use crate::channel::ChannelConfig;
@@ -153,7 +154,16 @@ impl AivyxConfig {
     /// selection while remaining backward-compatible.
     pub fn resolve_provider(&self, name: Option<&str>) -> &ProviderConfig {
         match name {
-            Some(n) => self.providers.get(n).unwrap_or(&self.provider),
+            Some(n) => match self.providers.get(n) {
+                Some(p) => p,
+                None => {
+                    warn!(
+                        provider_name = %n,
+                        "named provider not found in config, falling back to default provider"
+                    );
+                    &self.provider
+                }
+            },
             None => &self.provider,
         }
     }

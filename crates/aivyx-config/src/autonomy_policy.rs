@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutonomyPolicy {
     /// The autonomy tier assigned to new agents by default.
+    #[serde(default = "default_tier")]
     pub default_tier: AutonomyTier,
     /// Rate limit for tool invocations.
+    #[serde(default = "default_max_tool_calls_per_minute")]
     pub max_tool_calls_per_minute: u32,
     /// Spending cap per agent session in USD.
     /// 0.0 means unlimited (no cap enforcement) — the natural default for
@@ -22,6 +24,14 @@ pub struct AutonomyPolicy {
     /// Base delay in milliseconds for exponential backoff.
     #[serde(default = "default_retry_base_delay_ms")]
     pub retry_base_delay_ms: u64,
+}
+
+fn default_tier() -> AutonomyTier {
+    AutonomyTier::Leash
+}
+
+fn default_max_tool_calls_per_minute() -> u32 {
+    60
 }
 
 fn default_max_retries() -> u32 {
@@ -110,5 +120,17 @@ max_tool_calls_per_minute = 120
         );
         assert_eq!(parsed.max_retries, 3);
         assert_eq!(parsed.retry_base_delay_ms, 1000);
+    }
+
+    #[test]
+    fn completely_empty_autonomy_section_deserializes() {
+        // All fields have serde defaults, so an empty table must parse.
+        let parsed: AutonomyPolicy = toml::from_str("").unwrap();
+        assert_eq!(parsed.default_tier, AutonomyTier::Leash);
+        assert_eq!(parsed.max_tool_calls_per_minute, 60);
+        assert!(parsed.require_approval_for_destructive);
+        assert_eq!(parsed.max_retries, 3);
+        assert_eq!(parsed.retry_base_delay_ms, 1000);
+        assert!((parsed.max_cost_per_session_usd - 0.0).abs() < f64::EPSILON);
     }
 }
