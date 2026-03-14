@@ -18,7 +18,9 @@ pub struct OllamaProvider {
 impl OllamaProvider {
     pub fn new(base_url: String, model: String) -> Self {
         Self {
-            inner: OpenAICompatibleProvider::new(None, model, base_url, "ollama".into(), 60),
+            // 300s timeout: large models (32B+) need time to load into VRAM
+            // on first request; 60s was causing 502 timeouts.
+            inner: OpenAICompatibleProvider::new(None, model, base_url, "ollama".into(), 300),
         }
     }
 }

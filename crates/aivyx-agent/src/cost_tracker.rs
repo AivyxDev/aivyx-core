@@ -34,7 +34,9 @@ impl CostTracker {
         self.total_input_tokens += usage.input_tokens as u64;
         self.total_output_tokens += usage.output_tokens as u64;
 
-        if self.accumulated_cost_usd > self.max_cost_usd {
+        // max_cost_usd == 0.0 means "unlimited" (no cap enforcement).
+        // This is the natural default for local providers like Ollama.
+        if self.max_cost_usd > 0.0 && self.accumulated_cost_usd > self.max_cost_usd {
             return Err(AivyxError::Agent(format!(
                 "session cost cap exceeded: ${:.4} > ${:.2}",
                 self.accumulated_cost_usd, self.max_cost_usd
@@ -137,5 +139,26 @@ mod tests {
             })
             .unwrap();
         assert!((tracker.current_cost_usd() - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn zero_cap_means_unlimited() {
+        // max_cost_usd = 0.0 should mean "no limit", not "zero budget".
+        let mut tracker = CostTracker::new(0.0, 0.000015, 0.000075);
+        // Simulate heavy usage that would exceed any finite cap.
+        tracker
+            .track(&TokenUsage {
+                input_tokens: 1_000_000,
+                output_tokens: 1_000_000,
+            })
+            .unwrap();
+        assert!(tracker.current_cost_usd() > 0.0);
+        // Should still succeed — no cap enforcement.
+        tracker
+            .track(&TokenUsage {
+                input_tokens: 1_000_000,
+                output_tokens: 1_000_000,
+            })
+            .unwrap();
     }
 }

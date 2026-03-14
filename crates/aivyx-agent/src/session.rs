@@ -431,14 +431,22 @@ impl AgentSession {
     }
 
     /// Create a MemoryManager from embedding configuration.
+    ///
+    /// The `EncryptedStore` handle is scoped so its redb lock is released
+    /// before the memory-specific SQLite DB opens. This prevents "Database
+    /// already open" errors when the server's global memory manager also
+    /// holds a handle on `store.db`.
     #[cfg(feature = "memory")]
     fn create_memory_manager(
         &self,
         embedding_config: &aivyx_config::EmbeddingConfig,
     ) -> Result<aivyx_memory::MemoryManager> {
-        let store = EncryptedStore::open(self.dirs.store_path())?;
-        let embedding_provider =
-            aivyx_llm::create_embedding_provider(embedding_config, &store, &self.master_key)?;
+        // Scope the EncryptedStore so its redb lock is released before we
+        // open the memory-specific database.
+        let embedding_provider = {
+            let store = EncryptedStore::open(self.dirs.store_path())?;
+            aivyx_llm::create_embedding_provider(embedding_config, &store, &self.master_key)?
+        }; // store lock released here
         let memory_db_path = self.dirs.memory_dir().join("memory.db");
         let memory_store = aivyx_memory::MemoryStore::open(&memory_db_path)?;
         let memory_key = derive_memory_key(&self.master_key);

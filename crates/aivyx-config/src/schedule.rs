@@ -38,6 +38,8 @@ pub struct ScheduleEntry {
     #[serde(default)]
     pub team: Option<String>,
     /// When this entry was created.
+    /// Auto-generated if omitted in user-authored TOML.
+    #[serde(default = "chrono::Utc::now")]
     pub created_at: DateTime<Utc>,
     /// When this entry last fired (`None` if never run).
     #[serde(default)]
@@ -171,5 +173,24 @@ mod tests {
         }"#;
         let entry: ScheduleEntry = serde_json::from_str(json).unwrap();
         assert!(entry.team.is_none());
+    }
+
+    #[test]
+    fn schedule_entry_from_toml_without_created_at() {
+        // User-authored TOML should not require created_at.
+        let toml_str = r#"
+name = "daily-review"
+cron = "0 9 * * *"
+agent = "reviewer"
+prompt = "Review recent code changes"
+"#;
+        let entry: ScheduleEntry = toml::from_str(toml_str).unwrap();
+        assert_eq!(entry.name, "daily-review");
+        assert_eq!(entry.cron, "0 9 * * *");
+        assert!(entry.notify); // default true
+        assert!(entry.enabled); // default true
+        // created_at should be auto-generated (close to now)
+        let age = chrono::Utc::now() - entry.created_at;
+        assert!(age.num_seconds() < 5, "created_at should be auto-generated");
     }
 }

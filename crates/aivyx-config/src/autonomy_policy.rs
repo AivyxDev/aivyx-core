@@ -9,8 +9,12 @@ pub struct AutonomyPolicy {
     /// Rate limit for tool invocations.
     pub max_tool_calls_per_minute: u32,
     /// Spending cap per agent session in USD.
+    /// 0.0 means unlimited (no cap enforcement) — the natural default for
+    /// local providers like Ollama.
+    #[serde(default = "default_max_cost")]
     pub max_cost_per_session_usd: f64,
     /// Whether destructive actions always require human approval.
+    #[serde(default = "default_require_approval")]
     pub require_approval_for_destructive: bool,
     /// Maximum number of retries for transient LLM errors (rate limit, HTTP).
     #[serde(default = "default_max_retries")]
@@ -26,6 +30,14 @@ fn default_max_retries() -> u32 {
 
 fn default_retry_base_delay_ms() -> u64 {
     1000
+}
+
+fn default_max_cost() -> f64 {
+    0.0 // unlimited
+}
+
+fn default_require_approval() -> bool {
+    true // safe default
 }
 
 impl Default for AutonomyPolicy {
@@ -76,6 +88,26 @@ max_cost_per_session_usd = 5.0
 require_approval_for_destructive = true
 "#;
         let parsed: AutonomyPolicy = toml::from_str(toml_str).unwrap();
+        assert_eq!(parsed.max_retries, 3);
+        assert_eq!(parsed.retry_base_delay_ms, 1000);
+    }
+
+    #[test]
+    fn backward_compat_missing_cost_and_approval() {
+        // Minimal config that omits cost cap and approval flag.
+        let toml_str = r#"
+default_tier = "Trust"
+max_tool_calls_per_minute = 120
+"#;
+        let parsed: AutonomyPolicy = toml::from_str(toml_str).unwrap();
+        assert!(
+            (parsed.max_cost_per_session_usd - 0.0).abs() < f64::EPSILON,
+            "default cost should be 0.0 (unlimited)"
+        );
+        assert!(
+            parsed.require_approval_for_destructive,
+            "default should require approval"
+        );
         assert_eq!(parsed.max_retries, 3);
         assert_eq!(parsed.retry_base_delay_ms, 1000);
     }
