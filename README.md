@@ -14,7 +14,7 @@
 
 `aivyx-core` is a Cargo workspace of **10 crates** (~45,200 lines of Rust, ~805 tests) that form the shared layer between:
 
-- **[Aivyx](https://github.com/AivyxDev/aivyx)** — the public CLI + Desktop app (MIT)
+- **[Aivyx](https://github.com/AivyxDev/aivyx-app)** — the public CLI + Desktop app (MIT)
 - **[Aivyx Engine](https://aivyx-gitea.cloud/AivyxDev/aivyx-engine)** — the private server and orchestration layer (Proprietary)
 
 Every capability that both products share — encryption, LLM providers, memory, MCP tools, agent sessions, audit logging, federation — lives here. This ensures a single source of truth for security invariants and protocol implementations.
