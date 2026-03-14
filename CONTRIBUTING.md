@@ -4,7 +4,7 @@ Thank you for your interest in contributing to the shared foundation of the Aivy
 
 ## Architecture
 
-`aivyx-core` is a Cargo workspace of 10 crates that form the shared layer between the public [Aivyx agent](https://github.com/AivyxDev/aivyx) and the private Engine server.
+`aivyx-core` is a Cargo workspace of 10 crates that form the shared layer between the public [Aivyx agent](https://github.com/AivyxDev/aivyx-app) and the private Engine server.
 
 ```
 aivyx-core (types, traits, errors)
