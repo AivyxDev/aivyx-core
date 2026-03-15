@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use crate::autonomy_policy::AutonomyPolicy;
+use crate::cache::CacheConfig;
 use crate::channel::ChannelConfig;
 use crate::embedding::EmbeddingConfig;
 use crate::heartbeat::HeartbeatConfig;
@@ -29,6 +30,10 @@ pub struct AivyxConfig {
     /// Embedding provider for the memory system.
     /// `None` means memory features use the default (Ollama, nomic-embed-text).
     pub embedding: Option<EmbeddingConfig>,
+    /// LLM response caching configuration.
+    /// `None` means caching is disabled.
+    #[serde(default)]
+    pub cache: Option<CacheConfig>,
     /// Named LLM provider configurations.
     /// Agents reference these by name via `provider` in their profile.
     /// If empty or name not found, agents use the top-level `provider` config.

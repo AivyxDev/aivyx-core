@@ -5,6 +5,7 @@ use aivyx_core::{AgentId, AivyxError, CapabilityId, Principal, Result, ToolRegis
 #[cfg(feature = "network-tools")]
 use aivyx_crypto::derive_tool_key;
 use aivyx_crypto::{EncryptedStore, MasterKey, derive_audit_key, derive_memory_key};
+use aivyx_llm::cache::{CacheEvent, CacheObserver, CachingProvider};
 use aivyx_llm::circuit_breaker::CircuitBreakerConfig;
 use aivyx_llm::create_provider;
 use aivyx_llm::resilient::{FailoverObserver, ProviderEvent, ResilientProvider};
@@ -243,6 +244,66 @@ impl AgentSession {
 
                 (Box::new(resilient), provider_config)
             }
+        };
+
+        // Wrap provider in CachingProvider if cache is configured.
+        let cache_config = profile.cache.as_ref().or(self.config.cache.as_ref());
+        let provider: Box<dyn aivyx_llm::provider::LlmProvider> = if let Some(cc) = cache_config {
+            if cc.enabled {
+                let mut caching = CachingProvider::new(provider, cc);
+
+                // Wire semantic cache if embedding provider is available.
+                if cc.semantic_enabled
+                    && let Some(ref emb_config) = self.config.embedding
+                {
+                    let store = EncryptedStore::open(self.dirs.store_path())?;
+                    match aivyx_llm::create_embedding_provider(emb_config, &store, &self.master_key)
+                    {
+                        Ok(emb) => {
+                            caching = caching.with_semantic(std::sync::Arc::from(emb));
+                        }
+                        Err(e) => {
+                            tracing::warn!("Semantic cache disabled: {e}");
+                        }
+                    }
+                }
+
+                // Wire cache observer → audit log.
+                let cache_audit_key = derive_audit_key(&self.master_key);
+                let cache_audit_log = AuditLog::new(self.dirs.audit_path(), &cache_audit_key);
+                let cache_agent_id = agent_id;
+                let cache_observer: CacheObserver =
+                    std::sync::Arc::new(move |event: CacheEvent| {
+                        let audit_event = match event {
+                            CacheEvent::PromptCacheHit {
+                                prompt_hash,
+                                tokens_saved,
+                            } => AuditEvent::PromptCacheHit {
+                                prompt_hash,
+                                tokens_saved,
+                                agent_id: cache_agent_id,
+                            },
+                            CacheEvent::SemanticCacheHit {
+                                similarity,
+                                tokens_saved,
+                            } => AuditEvent::SemanticCacheHit {
+                                similarity,
+                                tokens_saved,
+                                agent_id: cache_agent_id,
+                            },
+                        };
+                        if let Err(e) = cache_audit_log.append(audit_event) {
+                            tracing::warn!("Failed to audit cache event: {e}");
+                        }
+                    });
+
+                caching = caching.with_observer(cache_observer);
+                Box::new(caching)
+            } else {
+                provider
+            }
+        } else {
+            provider
         };
 
         // Set up tool registry

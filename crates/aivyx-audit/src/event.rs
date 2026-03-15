@@ -197,6 +197,18 @@ pub enum AuditEvent {
         tool_name: String,
         query_hash: String,
     },
+    /// An LLM response was served from the exact-match prompt cache.
+    PromptCacheHit {
+        prompt_hash: String,
+        tokens_saved: u32,
+        agent_id: AgentId,
+    },
+    /// An LLM response was served from the semantic similarity cache.
+    SemanticCacheHit {
+        similarity: f32,
+        tokens_saved: u32,
+        agent_id: AgentId,
+    },
     /// A new task/mission was created.
     TaskCreated {
         task_id: TaskId,
@@ -898,6 +910,48 @@ mod tests {
         {
             assert_eq!(tool_name, "web_search");
             assert_eq!(query_hash, "abc123");
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn prompt_cache_hit_serde_roundtrip() {
+        let event = AuditEvent::PromptCacheHit {
+            prompt_hash: "sha256abc".into(),
+            tokens_saved: 500,
+            agent_id: AgentId::new(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::PromptCacheHit {
+            prompt_hash,
+            tokens_saved,
+            ..
+        } = restored
+        {
+            assert_eq!(prompt_hash, "sha256abc");
+            assert_eq!(tokens_saved, 500);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn semantic_cache_hit_serde_roundtrip() {
+        let event = AuditEvent::SemanticCacheHit {
+            similarity: 0.97,
+            tokens_saved: 300,
+            agent_id: AgentId::new(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::SemanticCacheHit {
+            similarity,
+            tokens_saved,
+            ..
+        } = restored
+        {
+            assert!((similarity - 0.97).abs() < f32::EPSILON);
+            assert_eq!(tokens_saved, 300);
         } else {
             panic!("wrong variant");
         }

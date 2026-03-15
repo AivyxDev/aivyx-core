@@ -4,6 +4,7 @@
 //! Claude, OpenAI, and Ollama APIs. Also includes STT and TTS provider
 //! abstractions for voice features.
 
+pub mod cache;
 pub mod circuit_breaker;
 pub mod claude;
 pub mod embedding;
@@ -21,6 +22,7 @@ pub mod tts;
 pub mod tts_edge;
 pub mod tts_openai;
 
+pub use cache::{CacheEvent, CacheMetrics, CacheObserver, CachingProvider};
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 pub use claude::ClaudeProvider;
 pub use embedding::{Embedding, EmbeddingProvider, create_embedding_provider};

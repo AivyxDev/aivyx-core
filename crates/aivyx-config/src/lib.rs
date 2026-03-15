@@ -4,6 +4,7 @@
 //! dotted-key access, LLM provider selection, and autonomy policy settings.
 
 pub mod autonomy_policy;
+pub mod cache;
 pub mod channel;
 pub mod config;
 pub mod dirs;
@@ -22,6 +23,7 @@ pub mod smtp;
 pub mod speech;
 
 pub use autonomy_policy::{AutonomyPolicy, CircuitBreakerPolicy};
+pub use cache::CacheConfig;
 pub use channel::{ChannelConfig, ChannelPlatform};
 pub use config::{
     AivyxConfig, BackupConfig, BillingConfig, DefaultQuotas, GroupRoleMappingConfig,

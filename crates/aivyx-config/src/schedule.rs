@@ -28,6 +28,14 @@ pub struct ScheduleEntry {
     /// the next interactive turn.
     #[serde(default = "default_true")]
     pub notify: bool,
+    /// Whether the result should be auto-published to the local Nexus
+    /// social network. Requires Nexus to be enabled in config.
+    ///
+    /// When `true`, the scheduler publishes the agent's response as a
+    /// Nexus post after the turn completes. This is independent of
+    /// `notify` — both can be true to store a notification AND publish.
+    #[serde(default)]
+    pub nexus: bool,
     /// Whether this schedule is currently active.
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -64,6 +72,7 @@ impl ScheduleEntry {
             agent: agent.into(),
             prompt: prompt.into(),
             notify: true,
+            nexus: false,
             enabled: true,
             team: None,
             created_at: Utc::now(),

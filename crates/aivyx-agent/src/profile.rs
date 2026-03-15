@@ -36,6 +36,10 @@ pub struct AgentProfile {
     /// Empty means no fallback (current behavior).
     #[serde(default)]
     pub fallback_providers: Vec<String>,
+    /// Per-agent cache configuration override.
+    /// `None` uses the global `[cache]` config.
+    #[serde(default)]
+    pub cache: Option<aivyx_config::CacheConfig>,
     /// Maximum tokens for LLM responses.
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
@@ -92,13 +96,21 @@ impl AgentProfile {
 
     /// Return the effective system prompt for this profile.
     ///
-    /// If a [`Persona`] is set, its [`generate_soul()`](Persona::generate_soul)
-    /// output is used. Otherwise the raw `soul` string is returned.
+    /// When both a [`Persona`] and a non-empty `soul` string are present,
+    /// the custom soul is used as the identity foundation and persona
+    /// behavioral guidelines are appended. This preserves user-crafted
+    /// personality while layering on structured style rules.
+    ///
+    /// - **soul + persona** → `"{soul}\n\n{persona guidelines}"`
+    /// - **persona only** (empty soul) → `persona.generate_soul(role)`
+    /// - **soul only** (no persona) → raw `soul` string
     pub fn effective_soul(&self) -> String {
-        if let Some(ref persona) = self.persona {
-            persona.generate_soul(&self.role)
-        } else {
-            self.soul.clone()
+        match (&self.persona, self.soul.is_empty()) {
+            (Some(persona), true) => persona.generate_soul(&self.role),
+            (Some(persona), false) => {
+                format!("{}\n\n{}", self.soul, persona.generate_guidelines())
+            }
+            _ => self.soul.clone(),
         }
     }
 
@@ -125,6 +137,7 @@ impl AgentProfile {
             autonomy_tier: None,
             provider: None,
             fallback_providers: Vec::new(),
+            cache: None,
             max_tokens: default_max_tokens(),
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
@@ -215,6 +228,7 @@ impl AgentProfile {
             autonomy_tier: None,
             provider: None,
             fallback_providers: Vec::new(),
+            cache: None,
             max_tokens: 8192,
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
@@ -259,6 +273,7 @@ impl AgentProfile {
             autonomy_tier: None,
             provider: None,
             fallback_providers: Vec::new(),
+            cache: None,
             max_tokens: 8192,
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
@@ -296,6 +311,7 @@ impl AgentProfile {
             autonomy_tier: None,
             provider: None,
             fallback_providers: Vec::new(),
+            cache: None,
             max_tokens: 8192,
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
@@ -326,6 +342,7 @@ impl AgentProfile {
             autonomy_tier: None,
             provider: None,
             fallback_providers: Vec::new(),
+            cache: None,
             max_tokens: 8192,
             capabilities: vec![
                 ProfileCapability {
@@ -378,6 +395,7 @@ impl AgentProfile {
             autonomy_tier: Some(AutonomyTier::Leash),
             provider: None,
             fallback_providers: Vec::new(),
+            cache: None,
             max_tokens: 8192,
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
@@ -585,20 +603,34 @@ soul = "You are a helpful legacy agent."
     }
 
     #[test]
-    fn effective_soul_uses_persona() {
+    fn effective_soul_merges_soul_and_persona() {
         let mut profile = AgentProfile::template("test", "coder");
         profile.persona = Some(Persona::for_role("coder").unwrap());
         let soul = profile.effective_soul();
-        assert!(soul.contains("AI coder"));
-        assert!(!soul.is_empty());
+        // Custom soul identity is preserved
+        assert!(soul.contains("helpful AI assistant acting as a coder"));
+        // Persona guidelines are appended
+        assert!(soul.contains("Do not use emoji"));
+        // Role intro from generate_soul() is NOT present (we use guidelines)
+        assert!(!soul.contains("You are an AI coder."));
     }
 
     #[test]
-    fn effective_soul_falls_back_to_raw() {
+    fn effective_soul_empty_soul_uses_generate_soul() {
+        let mut profile = AgentProfile::template("test", "coder");
+        profile.soul = String::new();
+        profile.persona = Some(Persona::for_role("coder").unwrap());
+        let soul = profile.effective_soul();
+        // Falls back to generate_soul() with role intro
+        assert!(soul.contains("AI coder"));
+    }
+
+    #[test]
+    fn effective_soul_no_persona_uses_raw_soul() {
         let profile = AgentProfile::template("test", "coder");
         assert!(profile.persona.is_none());
         let soul = profile.effective_soul();
-        assert!(soul.contains("coder"));
+        assert!(soul.contains("helpful AI assistant"));
     }
 
     #[test]

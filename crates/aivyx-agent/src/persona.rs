@@ -194,11 +194,31 @@ impl Persona {
     ///
     /// The result is suitable for use as the `soul` / system prompt of an
     /// agent. The `role` parameter is included in the opening sentence.
+    ///
+    /// When a custom `soul` string is also present on the profile, prefer
+    /// [`generate_guidelines()`](Self::generate_guidelines) instead — it
+    /// produces only the behavioral rules without the role introduction,
+    /// allowing the custom soul to provide the agent's identity.
     pub fn generate_soul(&self, role: &str) -> String {
         let mut parts: Vec<String> = Vec::new();
-
-        // ── Role introduction ──────────────────────────────────────
         parts.push(format!("You are an AI {role}."));
+        parts.extend(self.build_behavioral_rules());
+        parts.join(" ")
+    }
+
+    /// Generate behavioral guidelines without a role introduction.
+    ///
+    /// Use this when the agent has a custom `soul` string that already
+    /// defines its identity. The guidelines are appended after the soul
+    /// to layer structured personality rules on top of the user-crafted
+    /// identity prompt.
+    pub fn generate_guidelines(&self) -> String {
+        self.build_behavioral_rules().join(" ")
+    }
+
+    /// Build the common set of behavioral rules from persona dimensions.
+    fn build_behavioral_rules(&self) -> Vec<String> {
+        let mut parts: Vec<String> = Vec::new();
 
         // ── Formality ──────────────────────────────────────────────
         if self.formality < 0.3 {
@@ -286,7 +306,7 @@ impl Persona {
             parts.push(format!("When greeting the user: {greeting}."));
         }
 
-        parts.join(" ")
+        parts
     }
 
     // ── Preset constructors ────────────────────────────────────────

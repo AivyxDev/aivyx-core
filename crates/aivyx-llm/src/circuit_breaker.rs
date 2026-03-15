@@ -96,12 +96,12 @@ impl CircuitBreaker {
             CircuitState::Closed => true,
             CircuitState::Open => {
                 // Check if recovery timeout has elapsed.
-                if let Some(last_failure) = inner.last_failure_at {
-                    if last_failure.elapsed() >= self.config.recovery_timeout {
-                        inner.state = CircuitState::HalfOpen;
-                        inner.consecutive_successes = 0;
-                        return true;
-                    }
+                if let Some(last_failure) = inner.last_failure_at
+                    && last_failure.elapsed() >= self.config.recovery_timeout
+                {
+                    inner.state = CircuitState::HalfOpen;
+                    inner.consecutive_successes = 0;
+                    return true;
                 }
                 false
             }
