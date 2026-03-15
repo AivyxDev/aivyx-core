@@ -12,7 +12,6 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::cache::ToolResultCache;
-use crate::client::McpClient;
 use crate::pool::McpServerPool;
 use crate::protocol::McpToolDef;
 
@@ -55,9 +54,9 @@ pub struct McpProxyTool {
     id: ToolId,
     /// MCP tool definition (name, description, schema).
     tool_def: McpToolDef,
-    /// Shared MCP client for making `tools/call` requests.
-    client: Arc<McpClient>,
-    /// Server name (used for capability scope `mcp:<server_name>`).
+    /// Server connection pool for client lookup and reconnection.
+    pool: Arc<McpServerPool>,
+    /// Server name (used for capability scope `mcp:<server_name>` and pool lookup).
     server_name: String,
     /// Optional result cache for expensive tool calls.
     cache: Option<Arc<ToolResultCache>>,
@@ -67,16 +66,18 @@ pub struct McpProxyTool {
 
 impl McpProxyTool {
     /// Create a new proxy tool for an MCP tool definition.
+    ///
+    /// The `pool` must already contain a client for `server_name`.
     pub fn new(
         tool_def: McpToolDef,
-        client: Arc<McpClient>,
+        pool: Arc<McpServerPool>,
         server_name: &str,
         cache: Option<Arc<ToolResultCache>>,
     ) -> Self {
         Self {
             id: ToolId::new(),
             tool_def,
-            client,
+            pool,
             server_name: server_name.to_string(),
             cache,
             observer: None,
@@ -86,7 +87,7 @@ impl McpProxyTool {
     /// Create a new proxy tool with an observer for audit/observability.
     pub fn with_observer(
         tool_def: McpToolDef,
-        client: Arc<McpClient>,
+        pool: Arc<McpServerPool>,
         server_name: &str,
         cache: Option<Arc<ToolResultCache>>,
         observer: McpToolCallObserver,
@@ -94,7 +95,7 @@ impl McpProxyTool {
         Self {
             id: ToolId::new(),
             tool_def,
-            client,
+            pool,
             server_name: server_name.to_string(),
             cache,
             observer: Some(observer),
@@ -147,8 +148,13 @@ impl Tool for McpProxyTool {
 
         let start = std::time::Instant::now();
 
-        // Forward to MCP server.
-        match self.client.call_tool(self.name(), input.clone()).await {
+        // Get client from pool.
+        let client = self.pool.get(&self.server_name).await.ok_or_else(|| {
+            aivyx_core::AivyxError::Other(format!("MCP server '{}' not in pool", self.server_name))
+        })?;
+
+        // Forward to MCP server; retry once after reconnection on failure.
+        match client.call_tool(self.name(), input.clone()).await {
             Ok(result) => {
                 if let Some(obs) = &self.observer {
                     obs(McpToolCallEvent::Completed {
@@ -166,15 +172,53 @@ impl Tool for McpProxyTool {
 
                 Ok(result)
             }
-            Err(e) => {
-                if let Some(obs) = &self.observer {
-                    obs(McpToolCallEvent::Failed {
-                        server_name: self.server_name.clone(),
-                        tool_name: self.name().to_string(),
-                        error: e.to_string(),
-                    });
+            Err(original_err) => {
+                // Attempt reconnection and retry once.
+                tracing::warn!(
+                    "MCP tool '{}' call failed, attempting reconnect: {original_err}",
+                    self.name()
+                );
+
+                match self.pool.reconnect(&self.server_name).await {
+                    Ok(new_client) => {
+                        match new_client.call_tool(self.name(), input.clone()).await {
+                            Ok(result) => {
+                                if let Some(obs) = &self.observer {
+                                    obs(McpToolCallEvent::Completed {
+                                        server_name: self.server_name.clone(),
+                                        tool_name: self.name().to_string(),
+                                        duration_ms: start.elapsed().as_millis() as u64,
+                                    });
+                                }
+                                if let Some(cache) = &self.cache {
+                                    let key = ToolResultCache::cache_key(self.name(), &input);
+                                    cache.insert(&key, result.clone());
+                                }
+                                Ok(result)
+                            }
+                            Err(retry_err) => {
+                                if let Some(obs) = &self.observer {
+                                    obs(McpToolCallEvent::Failed {
+                                        server_name: self.server_name.clone(),
+                                        tool_name: self.name().to_string(),
+                                        error: retry_err.to_string(),
+                                    });
+                                }
+                                Err(retry_err)
+                            }
+                        }
+                    }
+                    Err(_reconnect_err) => {
+                        if let Some(obs) = &self.observer {
+                            obs(McpToolCallEvent::Failed {
+                                server_name: self.server_name.clone(),
+                                tool_name: self.name().to_string(),
+                                error: original_err.to_string(),
+                            });
+                        }
+                        Err(original_err)
+                    }
                 }
-                Err(e)
             }
         }
     }
@@ -183,8 +227,11 @@ impl Tool for McpProxyTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::McpClient;
     use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
     use crate::transport::McpTransportLayer;
+    use aivyx_config::McpServerConfig;
+    use std::collections::HashMap;
     use std::sync::Mutex as StdMutex;
     use std::time::Duration;
 
@@ -210,6 +257,33 @@ mod tests {
         }
     }
 
+    fn mock_config(name: &str) -> McpServerConfig {
+        McpServerConfig {
+            name: name.into(),
+            transport: aivyx_config::McpTransport::Stdio {
+                command: "echo".into(),
+                args: vec![],
+            },
+            env: HashMap::new(),
+            timeout_secs: 30,
+            allowed_tools: None,
+            blocked_tools: None,
+            max_reconnect_attempts: 1,
+            reconnect_backoff_ms: 1,
+        }
+    }
+
+    /// Helper: create a pool with a mock client inserted.
+    async fn pool_with_mock(name: &str, responses: Vec<JsonRpcResponse>) -> Arc<McpServerPool> {
+        let transport = MockTransport {
+            responses: StdMutex::new(responses),
+        };
+        let client = Arc::new(McpClient::from_transport(Box::new(transport), name));
+        let pool = Arc::new(McpServerPool::new());
+        pool.insert(name.into(), client, mock_config(name)).await;
+        pool
+    }
+
     #[tokio::test]
     async fn proxy_tool_implements_tool_trait() {
         let call_response = JsonRpcResponse {
@@ -221,13 +295,7 @@ mod tests {
             error: None,
         };
 
-        let transport = MockTransport {
-            responses: StdMutex::new(vec![call_response]),
-        };
-        let client = Arc::new(McpClient::from_transport(
-            Box::new(transport),
-            "test-server",
-        ));
+        let pool = pool_with_mock("test-server", vec![call_response]).await;
 
         let tool_def = McpToolDef {
             name: "echo".into(),
@@ -235,7 +303,7 @@ mod tests {
             input_schema: serde_json::json!({"type": "object"}),
         };
 
-        let proxy = McpProxyTool::new(tool_def, client, "test-server", None);
+        let proxy = McpProxyTool::new(tool_def, pool, "test-server", None);
 
         assert_eq!(proxy.name(), "echo");
         assert_eq!(proxy.description(), "Echoes input");
@@ -253,7 +321,6 @@ mod tests {
 
     #[tokio::test]
     async fn proxy_tool_uses_cache() {
-        // First call returns from "server", second from cache.
         let call_response = JsonRpcResponse {
             id: Some(1),
             result: Some(serde_json::json!({
@@ -263,12 +330,7 @@ mod tests {
             error: None,
         };
 
-        let transport = MockTransport {
-            responses: StdMutex::new(vec![call_response]),
-            // Only one response — second call must come from cache.
-        };
-        let client = Arc::new(McpClient::from_transport(Box::new(transport), "test"));
-
+        let pool = pool_with_mock("test", vec![call_response]).await;
         let cache = Arc::new(ToolResultCache::new(Duration::from_secs(300)));
 
         let tool_def = McpToolDef {
@@ -277,7 +339,7 @@ mod tests {
             input_schema: serde_json::json!({"type": "object"}),
         };
 
-        let proxy = McpProxyTool::new(tool_def, client, "test", Some(cache));
+        let proxy = McpProxyTool::new(tool_def, pool, "test", Some(cache));
 
         let input = serde_json::json!({"query": "rust"});
 
@@ -290,12 +352,9 @@ mod tests {
         assert_eq!(r2["content"], "result");
     }
 
-    #[test]
-    fn proxy_tool_name_contains_server() {
-        let transport = MockTransport {
-            responses: StdMutex::new(vec![]),
-        };
-        let client = Arc::new(McpClient::from_transport(Box::new(transport), "my-server"));
+    #[tokio::test]
+    async fn proxy_tool_name_contains_server() {
+        let pool = pool_with_mock("my-server", vec![]).await;
 
         let tool_def = McpToolDef {
             name: "my_tool".into(),
@@ -303,12 +362,10 @@ mod tests {
             input_schema: serde_json::json!({"type": "object"}),
         };
 
-        let proxy = McpProxyTool::new(tool_def, client, "my-server", None);
+        let proxy = McpProxyTool::new(tool_def, pool, "my-server", None);
 
-        // The tool name comes from the tool definition.
         assert_eq!(proxy.name(), "my_tool");
 
-        // The required scope should contain the server name as mcp:<server>.
         let scope = proxy.required_scope().unwrap();
         if let CapabilityScope::Custom(ref s) = scope {
             assert!(s.contains("my-server"), "scope should include server name");
@@ -329,10 +386,7 @@ mod tests {
             error: None,
         };
 
-        let transport = MockTransport {
-            responses: StdMutex::new(vec![call_response]),
-        };
-        let client = Arc::new(McpClient::from_transport(Box::new(transport), "obs-test"));
+        let pool = pool_with_mock("obs-test", vec![call_response]).await;
 
         let tool_def = McpToolDef {
             name: "echo".into(),
@@ -351,7 +405,7 @@ mod tests {
             events_clone.lock().unwrap().push(label.into());
         });
 
-        let proxy = McpProxyTool::with_observer(tool_def, client, "obs-test", None, observer);
+        let proxy = McpProxyTool::with_observer(tool_def, pool, "obs-test", None, observer);
 
         proxy
             .execute(serde_json::json!({"msg": "hi"}))
@@ -367,10 +421,8 @@ mod tests {
     #[tokio::test]
     async fn observer_receives_failed_on_error() {
         // No responses — transport will return an error.
-        let transport = MockTransport {
-            responses: StdMutex::new(vec![]),
-        };
-        let client = Arc::new(McpClient::from_transport(Box::new(transport), "fail-test"));
+        // Pool has no config to reconnect (reconnect will fail → Failed event).
+        let pool = pool_with_mock("fail-test", vec![]).await;
 
         let tool_def = McpToolDef {
             name: "bad_tool".into(),
@@ -389,7 +441,7 @@ mod tests {
             events_clone.lock().unwrap().push(label.into());
         });
 
-        let proxy = McpProxyTool::with_observer(tool_def, client, "fail-test", None, observer);
+        let proxy = McpProxyTool::with_observer(tool_def, pool, "fail-test", None, observer);
 
         let result = proxy.execute(serde_json::json!({})).await;
         assert!(result.is_err());
@@ -411,10 +463,7 @@ mod tests {
             error: None,
         };
 
-        let transport = MockTransport {
-            responses: StdMutex::new(vec![call_response]),
-        };
-        let client = Arc::new(McpClient::from_transport(Box::new(transport), "no-obs"));
+        let pool = pool_with_mock("no-obs", vec![call_response]).await;
 
         let tool_def = McpToolDef {
             name: "echo".into(),
@@ -422,8 +471,7 @@ mod tests {
             input_schema: serde_json::json!({"type": "object"}),
         };
 
-        // new() creates without observer — should work fine.
-        let proxy = McpProxyTool::new(tool_def, client, "no-obs", None);
+        let proxy = McpProxyTool::new(tool_def, pool, "no-obs", None);
         let result = proxy.execute(serde_json::json!({})).await.unwrap();
         assert_eq!(result["content"], "ok");
     }

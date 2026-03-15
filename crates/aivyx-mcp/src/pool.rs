@@ -186,7 +186,7 @@ impl McpServerPool {
                 Ok(client) => {
                     let client = Arc::new(client);
                     match client.initialize().await {
-                        Ok(()) => {
+                        Ok(_init_result) => {
                             self.replace_client(server_name, client.clone()).await;
                             tracing::info!("MCP '{}' reconnected successfully", server_name);
                             return Ok(client);

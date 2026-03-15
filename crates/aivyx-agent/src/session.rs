@@ -562,7 +562,7 @@ impl AgentSession {
                         let proxy = if let Some(obs) = &observer {
                             aivyx_mcp::McpProxyTool::with_observer(
                                 def,
-                                client.clone(),
+                                pool.clone(),
                                 &name,
                                 Some(cache.clone()),
                                 obs.clone(),
@@ -570,7 +570,7 @@ impl AgentSession {
                         } else {
                             aivyx_mcp::McpProxyTool::new(
                                 def,
-                                client.clone(),
+                                pool.clone(),
                                 &name,
                                 Some(cache.clone()),
                             )

@@ -325,6 +325,8 @@ mod tests {
             timeout_secs: 30,
             allowed_tools: None,
             blocked_tools: Some(vec!["dangerous".into()]),
+            max_reconnect_attempts: 3,
+            reconnect_backoff_ms: 1000,
         };
         assert!(config.is_tool_allowed("echo"));
         assert!(config.is_tool_allowed("read"));
@@ -361,6 +363,8 @@ mod tests {
             timeout_secs: 30,
             allowed_tools: Some(vec!["a".into()]),
             blocked_tools: Some(vec!["b".into()]),
+            max_reconnect_attempts: 3,
+            reconnect_backoff_ms: 1000,
         };
         assert!(config.validate().is_err());
     }
@@ -396,6 +400,9 @@ mod tests {
         assert!(config.allowed_tools.is_none());
         assert!(config.blocked_tools.is_none());
         assert!(config.is_tool_allowed("any_tool"));
+        // Reconnection fields get defaults too.
+        assert_eq!(config.max_reconnect_attempts, 3);
+        assert_eq!(config.reconnect_backoff_ms, 1000);
     }
 
     #[test]

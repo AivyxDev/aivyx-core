@@ -9,9 +9,9 @@
 //!
 //! ```text
 //! Agent ToolRegistry
-//!     └─ McpProxyTool ──→ McpClient ──→ Transport (stdio | SSE)
-//!                              │
-//!                         ToolResultCache
+//!     └─ McpProxyTool ──→ McpServerPool ──→ McpClient ──→ Transport (stdio | SSE)
+//!                              │                   │
+//!                         ToolResultCache    reconnect on failure
 //! ```
 //!
 //! Each MCP server connection produces a set of [`McpProxyTool`] instances
@@ -19,11 +19,14 @@
 //! the agent's tool registry alongside built-in tools — the agent doesn't
 //! need to know whether a tool is local or remote.
 //!
+//! The [`McpServerPool`] manages the lifecycle of all connected MCP servers,
+//! enabling graceful shutdown and automatic reconnection on failure.
+//!
 //! # Usage
 //!
 //! ```rust,no_run
 //! # async fn example() -> aivyx_core::Result<()> {
-//! use aivyx_mcp::{McpClient, McpProxyTool, ToolResultCache};
+//! use aivyx_mcp::{McpClient, McpProxyTool, McpServerPool, ToolResultCache};
 //! use aivyx_config::McpServerConfig;
 //! use std::sync::Arc;
 //! use std::time::Duration;
@@ -33,15 +36,22 @@
 //! let client = Arc::new(McpClient::connect(&config).await?);
 //! client.initialize().await?;
 //!
+//! // Track in pool for lifecycle management.
+//! let pool = Arc::new(McpServerPool::new());
+//! pool.insert("my-server".into(), client.clone(), config.clone()).await;
+//!
 //! // Discover tools.
 //! let tools = client.list_tools().await?;
 //!
 //! // Wrap each as a proxy tool for the agent's registry.
 //! let cache = Arc::new(ToolResultCache::new(Duration::from_secs(300)));
 //! for tool_def in tools {
-//!     let proxy = McpProxyTool::new(tool_def, client.clone(), "my-server", Some(cache.clone()));
+//!     let proxy = McpProxyTool::new(tool_def, pool.clone(), "my-server", Some(cache.clone()));
 //!     // registry.register(Box::new(proxy));
 //! }
+//!
+//! // Graceful shutdown when done.
+//! pool.shutdown_all().await;
 //! # Ok(())
 //! # }
 //! ```
