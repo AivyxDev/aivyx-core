@@ -6,6 +6,7 @@
 
 pub mod cache;
 pub mod circuit_breaker;
+pub mod classifier;
 pub mod claude;
 pub mod embedding;
 pub mod factory;
@@ -15,6 +16,7 @@ pub mod openai;
 pub mod openai_compat;
 pub mod provider;
 pub mod resilient;
+pub mod routing;
 pub mod stt;
 pub mod stt_ollama;
 pub mod stt_openai;
@@ -24,6 +26,7 @@ pub mod tts_openai;
 
 pub use cache::{CacheEvent, CacheMetrics, CacheObserver, CachingProvider};
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
+pub use classifier::ComplexityLevel;
 pub use claude::ClaudeProvider;
 pub use embedding::{Embedding, EmbeddingProvider, create_embedding_provider};
 pub use factory::{create_provider, create_stt_provider, create_tts_provider};
@@ -36,6 +39,7 @@ pub use openai::OpenAIProvider;
 pub use openai_compat::OpenAICompatibleProvider;
 pub use provider::{LlmProvider, StreamEvent};
 pub use resilient::{FailoverObserver, ProviderEvent, ResilientProvider};
+pub use routing::{RoutingEvent, RoutingObserver, RoutingProvider};
 pub use stt::{AudioFormat, SttProvider, TranscriptionResult};
 pub use stt_ollama::OllamaSttProvider;
 pub use stt_openai::OpenAiSttProvider;

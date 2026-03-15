@@ -1,9 +1,13 @@
+use std::collections::HashMap;
+
 use aivyx_core::{AivyxError, Result};
 use aivyx_llm::TokenUsage;
 
 /// Tracks estimated cost from LLM token usage across a session.
 ///
-/// Enforces a configurable per-session spending cap.
+/// Enforces a configurable per-session spending cap. The `metadata` map
+/// can carry observer-populated tags (e.g., complexity level from routing)
+/// that the engine-side cost ledger reads when recording entries.
 pub struct CostTracker {
     max_cost_usd: f64,
     accumulated_cost_usd: f64,
@@ -11,6 +15,8 @@ pub struct CostTracker {
     total_output_tokens: u64,
     input_cost_per_token: f64,
     output_cost_per_token: f64,
+    /// Metadata populated by observers (e.g., routing complexity level).
+    pub metadata: HashMap<String, String>,
 }
 
 impl CostTracker {
@@ -22,6 +28,7 @@ impl CostTracker {
             total_output_tokens: 0,
             input_cost_per_token,
             output_cost_per_token,
+            metadata: HashMap::new(),
         }
     }
 

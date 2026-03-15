@@ -246,6 +246,64 @@ impl AgentSession {
             }
         };
 
+        // Wrap provider in RoutingProvider if routing config is present.
+        let routing_config = profile.routing.as_ref().or(self.config.routing.as_ref());
+        let provider: Box<dyn aivyx_llm::provider::LlmProvider> = if let Some(rc) = routing_config {
+            let store = EncryptedStore::open(self.dirs.store_path())?;
+            let mut tier_providers = std::collections::HashMap::new();
+
+            for (level, name) in [
+                (aivyx_llm::ComplexityLevel::Simple, &rc.simple),
+                (aivyx_llm::ComplexityLevel::Medium, &rc.medium),
+                (aivyx_llm::ComplexityLevel::Complex, &rc.complex),
+            ] {
+                if let Some(provider_name) = name {
+                    let pc = self.config.resolve_provider(Some(provider_name));
+                    match create_provider(pc, &store, &self.master_key) {
+                        Ok(p) => {
+                            tier_providers.insert(level, p);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                level = ?level,
+                                provider = %provider_name,
+                                error = %e,
+                                "Failed to create routing provider, using default"
+                            );
+                        }
+                    }
+                }
+            }
+
+            if tier_providers.is_empty() {
+                provider
+            } else {
+                let rt_audit_key = derive_audit_key(&self.master_key);
+                let rt_audit_log = AuditLog::new(self.dirs.audit_path(), &rt_audit_key);
+                let rt_agent_id = agent_id;
+                let observer: aivyx_llm::RoutingObserver =
+                    std::sync::Arc::new(move |event: aivyx_llm::RoutingEvent| {
+                        let aivyx_llm::RoutingEvent::Routed {
+                            complexity,
+                            provider,
+                        } = event;
+                        if let Err(e) = rt_audit_log.append(AuditEvent::ModelRouted {
+                            agent_id: rt_agent_id,
+                            complexity: format!("{complexity}"),
+                            provider,
+                            timestamp: Utc::now(),
+                        }) {
+                            tracing::warn!("Failed to audit routing event: {e}");
+                        }
+                    });
+                let routing = aivyx_llm::RoutingProvider::new(provider, tier_providers)
+                    .with_observer(observer);
+                Box::new(routing)
+            }
+        } else {
+            provider
+        };
+
         // Wrap provider in CachingProvider if cache is configured.
         let cache_config = profile.cache.as_ref().or(self.config.cache.as_ref());
         let provider: Box<dyn aivyx_llm::provider::LlmProvider> = if let Some(cc) = cache_config {

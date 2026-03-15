@@ -647,6 +647,17 @@ pub enum AuditEvent {
         /// Number of text chunks stored.
         chunks: usize,
     },
+    /// A request was routed to a specific LLM provider based on complexity.
+    ModelRouted {
+        /// Agent that made the request.
+        agent_id: AgentId,
+        /// Classified complexity level (Simple, Medium, Complex).
+        complexity: String,
+        /// Name of the provider the request was routed to.
+        provider: String,
+        /// When the routing decision was made.
+        timestamp: DateTime<Utc>,
+    },
 }
 
 #[cfg(test)]
@@ -1934,6 +1945,28 @@ mod tests {
             assert_eq!(items_extracted, 5);
             assert_eq!(input_tokens, 800);
             assert_eq!(output_tokens, 120);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn model_routed_serde_roundtrip() {
+        let event = AuditEvent::ModelRouted {
+            agent_id: AgentId::new(),
+            complexity: "Simple".into(),
+            provider: "haiku".into(),
+            timestamp: Utc::now(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::ModelRouted {
+            complexity,
+            provider,
+            ..
+        } = restored
+        {
+            assert_eq!(complexity, "Simple");
+            assert_eq!(provider, "haiku");
         } else {
             panic!("wrong variant");
         }

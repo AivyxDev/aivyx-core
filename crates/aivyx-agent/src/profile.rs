@@ -40,6 +40,10 @@ pub struct AgentProfile {
     /// `None` uses the global `[cache]` config.
     #[serde(default)]
     pub cache: Option<aivyx_config::CacheConfig>,
+    /// Per-agent routing configuration override.
+    /// `None` uses the global `[routing]` config.
+    #[serde(default)]
+    pub routing: Option<aivyx_config::RoutingConfig>,
     /// Maximum tokens for LLM responses.
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
@@ -138,6 +142,7 @@ impl AgentProfile {
             provider: None,
             fallback_providers: Vec::new(),
             cache: None,
+            routing: None,
             max_tokens: default_max_tokens(),
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
@@ -229,6 +234,7 @@ impl AgentProfile {
             provider: None,
             fallback_providers: Vec::new(),
             cache: None,
+            routing: None,
             max_tokens: 8192,
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
@@ -274,6 +280,7 @@ impl AgentProfile {
             provider: None,
             fallback_providers: Vec::new(),
             cache: None,
+            routing: None,
             max_tokens: 8192,
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
@@ -312,6 +319,7 @@ impl AgentProfile {
             provider: None,
             fallback_providers: Vec::new(),
             cache: None,
+            routing: None,
             max_tokens: 8192,
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
@@ -343,6 +351,7 @@ impl AgentProfile {
             provider: None,
             fallback_providers: Vec::new(),
             cache: None,
+            routing: None,
             max_tokens: 8192,
             capabilities: vec![
                 ProfileCapability {
@@ -396,6 +405,7 @@ impl AgentProfile {
             provider: None,
             fallback_providers: Vec::new(),
             cache: None,
+            routing: None,
             max_tokens: 8192,
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),

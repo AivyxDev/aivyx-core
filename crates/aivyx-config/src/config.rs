@@ -16,6 +16,7 @@ use crate::otel::OtelConfig;
 use crate::plugin::PluginEntry;
 use crate::project::ProjectConfig;
 use crate::provider::ProviderConfig;
+use crate::routing::RoutingConfig;
 use crate::schedule::ScheduleEntry;
 use crate::server::ServerConfig;
 use crate::smtp::SmtpConfig;
@@ -144,6 +145,15 @@ pub struct AivyxConfig {
     /// disabled. Stored as `[otel]` in TOML.
     #[serde(default)]
     pub otel: Option<OtelConfig>,
+    /// Smart model routing configuration.
+    ///
+    /// Maps request complexity levels (simple/medium/complex) to named
+    /// providers from the `[providers]` map. When present, agents
+    /// automatically route requests to the cheapest adequate model.
+    /// `None` means routing is disabled (single provider per agent).
+    /// Stored as `[routing]` in TOML.
+    #[serde(default)]
+    pub routing: Option<RoutingConfig>,
 }
 
 impl AivyxConfig {
