@@ -15,6 +15,35 @@ use crate::cache::ToolResultCache;
 use crate::client::McpClient;
 use crate::protocol::McpToolDef;
 
+/// Events emitted during MCP tool call execution for observability.
+#[derive(Debug, Clone)]
+pub enum McpToolCallEvent {
+    /// A tool call is about to be executed.
+    Started {
+        server_name: String,
+        tool_name: String,
+    },
+    /// A tool call completed successfully.
+    Completed {
+        server_name: String,
+        tool_name: String,
+        duration_ms: u64,
+    },
+    /// A tool call failed.
+    Failed {
+        server_name: String,
+        tool_name: String,
+        error: String,
+    },
+}
+
+/// Observer callback for MCP tool call lifecycle events.
+///
+/// Injected by the agent layer to bridge MCP tool execution with the
+/// audit log without creating a direct dependency from `aivyx-mcp`
+/// to `aivyx-audit`.
+pub type McpToolCallObserver = Arc<dyn Fn(McpToolCallEvent) + Send + Sync>;
+
 /// Proxy tool that wraps a remote MCP tool definition.
 ///
 /// Implements the [`Tool`] trait so it can be registered in the agent's
@@ -31,6 +60,8 @@ pub struct McpProxyTool {
     server_name: String,
     /// Optional result cache for expensive tool calls.
     cache: Option<Arc<ToolResultCache>>,
+    /// Optional observer for audit/observability of tool calls.
+    observer: Option<McpToolCallObserver>,
 }
 
 impl McpProxyTool {
@@ -47,6 +78,25 @@ impl McpProxyTool {
             client,
             server_name: server_name.to_string(),
             cache,
+            observer: None,
+        }
+    }
+
+    /// Create a new proxy tool with an observer for audit/observability.
+    pub fn with_observer(
+        tool_def: McpToolDef,
+        client: Arc<McpClient>,
+        server_name: &str,
+        cache: Option<Arc<ToolResultCache>>,
+        observer: McpToolCallObserver,
+    ) -> Self {
+        Self {
+            id: ToolId::new(),
+            tool_def,
+            client,
+            server_name: server_name.to_string(),
+            cache,
+            observer: Some(observer),
         }
     }
 }
@@ -86,16 +136,46 @@ impl Tool for McpProxyTool {
             }
         }
 
-        // Forward to MCP server.
-        let result = self.client.call_tool(self.name(), input.clone()).await?;
-
-        // Cache the result.
-        if let Some(cache) = &self.cache {
-            let key = ToolResultCache::cache_key(self.name(), &input);
-            cache.insert(&key, result.clone());
+        // Notify observer of start.
+        if let Some(obs) = &self.observer {
+            obs(McpToolCallEvent::Started {
+                server_name: self.server_name.clone(),
+                tool_name: self.name().to_string(),
+            });
         }
 
-        Ok(result)
+        let start = std::time::Instant::now();
+
+        // Forward to MCP server.
+        match self.client.call_tool(self.name(), input.clone()).await {
+            Ok(result) => {
+                if let Some(obs) = &self.observer {
+                    obs(McpToolCallEvent::Completed {
+                        server_name: self.server_name.clone(),
+                        tool_name: self.name().to_string(),
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    });
+                }
+
+                // Cache the result.
+                if let Some(cache) = &self.cache {
+                    let key = ToolResultCache::cache_key(self.name(), &input);
+                    cache.insert(&key, result.clone());
+                }
+
+                Ok(result)
+            }
+            Err(e) => {
+                if let Some(obs) = &self.observer {
+                    obs(McpToolCallEvent::Failed {
+                        server_name: self.server_name.clone(),
+                        tool_name: self.name().to_string(),
+                        error: e.to_string(),
+                    });
+                }
+                Err(e)
+            }
+        }
     }
 }
 
@@ -235,5 +315,115 @@ mod tests {
         } else {
             panic!("expected Custom scope");
         }
+    }
+
+    #[tokio::test]
+    async fn observer_receives_events_on_success() {
+        let call_response = JsonRpcResponse {
+            id: Some(1),
+            result: Some(serde_json::json!({
+                "content": [{"type": "text", "text": "ok"}],
+                "isError": false
+            })),
+            error: None,
+        };
+
+        let transport = MockTransport {
+            responses: StdMutex::new(vec![call_response]),
+        };
+        let client = Arc::new(McpClient::from_transport(Box::new(transport), "obs-test"));
+
+        let tool_def = McpToolDef {
+            name: "echo".into(),
+            description: Some("Echo tool".into()),
+            input_schema: serde_json::json!({"type": "object"}),
+        };
+
+        let events: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(vec![]));
+        let events_clone = events.clone();
+        let observer: McpToolCallObserver = Arc::new(move |event| {
+            let label = match &event {
+                McpToolCallEvent::Started { .. } => "started",
+                McpToolCallEvent::Completed { .. } => "completed",
+                McpToolCallEvent::Failed { .. } => "failed",
+            };
+            events_clone.lock().unwrap().push(label.into());
+        });
+
+        let proxy = McpProxyTool::with_observer(tool_def, client, "obs-test", None, observer);
+
+        proxy
+            .execute(serde_json::json!({"msg": "hi"}))
+            .await
+            .unwrap();
+
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(captured[0], "started");
+        assert_eq!(captured[1], "completed");
+    }
+
+    #[tokio::test]
+    async fn observer_receives_failed_on_error() {
+        // No responses — transport will return an error.
+        let transport = MockTransport {
+            responses: StdMutex::new(vec![]),
+        };
+        let client = Arc::new(McpClient::from_transport(Box::new(transport), "fail-test"));
+
+        let tool_def = McpToolDef {
+            name: "bad_tool".into(),
+            description: None,
+            input_schema: serde_json::json!({"type": "object"}),
+        };
+
+        let events: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(vec![]));
+        let events_clone = events.clone();
+        let observer: McpToolCallObserver = Arc::new(move |event| {
+            let label = match &event {
+                McpToolCallEvent::Started { .. } => "started",
+                McpToolCallEvent::Completed { .. } => "completed",
+                McpToolCallEvent::Failed { .. } => "failed",
+            };
+            events_clone.lock().unwrap().push(label.into());
+        });
+
+        let proxy = McpProxyTool::with_observer(tool_def, client, "fail-test", None, observer);
+
+        let result = proxy.execute(serde_json::json!({})).await;
+        assert!(result.is_err());
+
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(captured[0], "started");
+        assert_eq!(captured[1], "failed");
+    }
+
+    #[tokio::test]
+    async fn no_observer_still_works() {
+        let call_response = JsonRpcResponse {
+            id: Some(1),
+            result: Some(serde_json::json!({
+                "content": [{"type": "text", "text": "ok"}],
+                "isError": false
+            })),
+            error: None,
+        };
+
+        let transport = MockTransport {
+            responses: StdMutex::new(vec![call_response]),
+        };
+        let client = Arc::new(McpClient::from_transport(Box::new(transport), "no-obs"));
+
+        let tool_def = McpToolDef {
+            name: "echo".into(),
+            description: None,
+            input_schema: serde_json::json!({"type": "object"}),
+        };
+
+        // new() creates without observer — should work fine.
+        let proxy = McpProxyTool::new(tool_def, client, "no-obs", None);
+        let result = proxy.execute(serde_json::json!({})).await.unwrap();
+        assert_eq!(result["content"], "ok");
     }
 }

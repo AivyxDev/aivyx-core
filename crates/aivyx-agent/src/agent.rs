@@ -61,6 +61,10 @@ pub struct Agent {
     /// when anomalous patterns are detected (high frequency, repeated denials,
     /// scope escalation).
     abuse_detector: Option<Arc<AbuseDetector>>,
+    /// MCP server connection pool for lifecycle management.
+    /// Tracks all active MCP server connections for graceful shutdown.
+    #[cfg(feature = "mcp")]
+    mcp_pool: Option<Arc<aivyx_mcp::McpServerPool>>,
 }
 
 impl Agent {
@@ -105,6 +109,8 @@ impl Agent {
             skill_loader: None,
             team_context: None,
             abuse_detector: None,
+            #[cfg(feature = "mcp")]
+            mcp_pool: None,
         }
     }
 
@@ -122,6 +128,20 @@ impl Agent {
     /// Set the active project for project-scoped context and memory recall.
     pub fn set_active_project(&mut self, project: aivyx_config::ProjectConfig) {
         self.active_project = Some(project);
+    }
+
+    /// Set the MCP server connection pool for lifecycle management.
+    #[cfg(feature = "mcp")]
+    pub fn set_mcp_pool(&mut self, pool: Arc<aivyx_mcp::McpServerPool>) {
+        self.mcp_pool = Some(pool);
+    }
+
+    /// Gracefully shut down all MCP server connections.
+    #[cfg(feature = "mcp")]
+    pub async fn shutdown_mcp(&self) {
+        if let Some(pool) = &self.mcp_pool {
+            pool.shutdown_all().await;
+        }
     }
 
     /// Set the skill loader for SKILL.md progressive disclosure.

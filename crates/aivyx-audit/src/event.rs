@@ -149,6 +149,29 @@ pub enum AuditEvent {
         reason: String,
         timestamp: DateTime<Utc>,
     },
+    /// An MCP tool call was initiated.
+    McpToolCallStarted {
+        server_name: String,
+        tool_name: String,
+        agent_id: AgentId,
+        timestamp: DateTime<Utc>,
+    },
+    /// An MCP tool call completed successfully.
+    McpToolCallCompleted {
+        server_name: String,
+        tool_name: String,
+        agent_id: AgentId,
+        duration_ms: u64,
+        timestamp: DateTime<Utc>,
+    },
+    /// An MCP tool call failed.
+    McpToolCallFailed {
+        server_name: String,
+        tool_name: String,
+        agent_id: AgentId,
+        error: String,
+        timestamp: DateTime<Utc>,
+    },
     /// A tool result was served from cache instead of executing.
     ToolCacheHit {
         tool_name: String,
@@ -716,6 +739,70 @@ mod tests {
         assert!(json.contains("\"type\":\"McpServerDisconnected\""));
         let restored: AuditEvent = serde_json::from_str(&json).unwrap();
         assert!(matches!(restored, AuditEvent::McpServerDisconnected { .. }));
+    }
+
+    #[test]
+    fn mcp_tool_call_started_serde_roundtrip() {
+        let event = AuditEvent::McpToolCallStarted {
+            server_name: "fs-server".into(),
+            tool_name: "read_file".into(),
+            agent_id: AgentId::new(),
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"McpToolCallStarted\""));
+        let restored: AuditEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(restored, AuditEvent::McpToolCallStarted { .. }));
+    }
+
+    #[test]
+    fn mcp_tool_call_completed_serde_roundtrip() {
+        let event = AuditEvent::McpToolCallCompleted {
+            server_name: "fs-server".into(),
+            tool_name: "read_file".into(),
+            agent_id: AgentId::new(),
+            duration_ms: 42,
+            timestamp: Utc::now(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::McpToolCallCompleted {
+            server_name,
+            tool_name,
+            duration_ms,
+            ..
+        } = restored
+        {
+            assert_eq!(server_name, "fs-server");
+            assert_eq!(tool_name, "read_file");
+            assert_eq!(duration_ms, 42);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn mcp_tool_call_failed_serde_roundtrip() {
+        let event = AuditEvent::McpToolCallFailed {
+            server_name: "fs-server".into(),
+            tool_name: "write_file".into(),
+            agent_id: AgentId::new(),
+            error: "permission denied".into(),
+            timestamp: Utc::now(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::McpToolCallFailed {
+            server_name,
+            tool_name,
+            error,
+            ..
+        } = restored
+        {
+            assert_eq!(server_name, "fs-server");
+            assert_eq!(tool_name, "write_file");
+            assert_eq!(error, "permission denied");
+        } else {
+            panic!("wrong variant");
+        }
     }
 
     #[test]

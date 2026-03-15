@@ -81,6 +81,11 @@ impl ToolRegistry {
         self.tools.is_empty()
     }
 
+    /// Check if a tool with this name is already registered.
+    pub fn has_name(&self, name: &str) -> bool {
+        self.name_index.contains_key(name)
+    }
+
     /// Generate tool definitions suitable for the LLM's `tools` parameter.
     ///
     /// Returns a JSON array of objects with `name`, `description`, and
@@ -270,6 +275,19 @@ mod tests {
         reg.unregister_by_name("keeper");
         assert!(reg.get_by_name("keeper").is_none());
         assert!(reg.name_index.is_empty());
+    }
+
+    #[test]
+    fn has_name_checks_index() {
+        let mut reg = ToolRegistry::new();
+        assert!(!reg.has_name("echo"));
+
+        reg.register(Box::new(DummyTool {
+            tool_id: ToolId::new(),
+            tool_name: "echo".into(),
+        }));
+        assert!(reg.has_name("echo"));
+        assert!(!reg.has_name("other"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use aivyx_audit::AuditLog;
+use aivyx_audit::{AuditEvent, AuditLog};
 use aivyx_capability::{ActionPattern, Capability, CapabilitySet};
 use aivyx_config::{AivyxConfig, AivyxDirs, ModelPricing};
 use aivyx_core::{AgentId, AivyxError, CapabilityId, Principal, Result, ToolRegistry};
@@ -203,12 +203,59 @@ impl AgentSession {
             None
         };
 
+        // Audit log — created before MCP discovery so the observer can use it.
+        let audit_key = derive_audit_key(&self.master_key);
+        let audit_log = AuditLog::new(self.dirs.audit_path(), &audit_key);
+
         // Discover and register MCP tools from configured servers.
         #[cfg(feature = "mcp")]
-        {
-            self.discover_mcp_tools(&mut tools, &profile.mcp_servers)
-                .await;
-        }
+        let mcp_pool = {
+            // Build an observer that bridges MCP tool call events to the audit log.
+            let mcp_audit_key = derive_audit_key(&self.master_key);
+            let mcp_audit_log = AuditLog::new(self.dirs.audit_path(), &mcp_audit_key);
+            let obs_agent_id = agent_id;
+            let observer: aivyx_mcp::McpToolCallObserver = std::sync::Arc::new(move |event| {
+                let audit_event = match event {
+                    aivyx_mcp::McpToolCallEvent::Started {
+                        server_name,
+                        tool_name,
+                    } => AuditEvent::McpToolCallStarted {
+                        server_name,
+                        tool_name,
+                        agent_id: obs_agent_id,
+                        timestamp: chrono::Utc::now(),
+                    },
+                    aivyx_mcp::McpToolCallEvent::Completed {
+                        server_name,
+                        tool_name,
+                        duration_ms,
+                    } => AuditEvent::McpToolCallCompleted {
+                        server_name,
+                        tool_name,
+                        agent_id: obs_agent_id,
+                        duration_ms,
+                        timestamp: chrono::Utc::now(),
+                    },
+                    aivyx_mcp::McpToolCallEvent::Failed {
+                        server_name,
+                        tool_name,
+                        error,
+                    } => AuditEvent::McpToolCallFailed {
+                        server_name,
+                        tool_name,
+                        agent_id: obs_agent_id,
+                        error,
+                        timestamp: chrono::Utc::now(),
+                    },
+                };
+                if let Err(e) = mcp_audit_log.append(audit_event) {
+                    tracing::warn!("Failed to audit MCP tool call: {e}");
+                }
+            });
+
+            self.discover_mcp_tools(&mut tools, &profile.mcp_servers, Some(observer))
+                .await
+        };
 
         // Autonomy tier: profile override > config default
         let autonomy_tier = profile
@@ -226,10 +273,6 @@ impl AgentSession {
             pricing.output_cost_per_token,
         );
 
-        // Audit log
-        let audit_key = derive_audit_key(&self.master_key);
-        let audit_log = AuditLog::new(self.dirs.audit_path(), &audit_key);
-
         let mut agent = Agent::new(
             agent_id,
             profile.name.clone(),
@@ -245,6 +288,12 @@ impl AgentSession {
             self.config.autonomy.max_retries,
             self.config.autonomy.retry_base_delay_ms,
         );
+
+        // Store MCP pool on agent for lifecycle management.
+        #[cfg(feature = "mcp")]
+        if let Some(pool) = mcp_pool {
+            agent.set_mcp_pool(pool);
+        }
 
         // Set the memory manager on the agent for runtime memory retrieval
         #[cfg(feature = "memory")]
@@ -429,20 +478,33 @@ impl AgentSession {
     /// Each server's tools are wrapped as [`McpProxyTool`] instances in the
     /// agent's tool registry. Connection failures are logged but do not prevent
     /// agent creation.
+    ///
+    /// Returns an [`McpServerPool`](aivyx_mcp::McpServerPool) tracking all
+    /// active connections for lifecycle management and graceful shutdown.
     #[cfg(feature = "mcp")]
     async fn discover_mcp_tools(
         &self,
         tools: &mut ToolRegistry,
         mcp_servers: &[aivyx_config::McpServerConfig],
-    ) {
+        observer: Option<aivyx_mcp::McpToolCallObserver>,
+    ) -> Option<std::sync::Arc<aivyx_mcp::McpServerPool>> {
         use std::sync::Arc;
         use std::time::Duration;
 
         if mcp_servers.is_empty() {
-            return;
+            return None;
+        }
+
+        // Validate all configs before connecting.
+        for config in mcp_servers {
+            if let Err(e) = config.validate() {
+                tracing::error!("MCP config validation failed: {e}");
+                return None;
+            }
         }
 
         let cache = Arc::new(aivyx_mcp::ToolResultCache::new(Duration::from_secs(300)));
+        let pool = Arc::new(aivyx_mcp::McpServerPool::new());
 
         // Connect, initialize, and list tools from all servers in parallel.
         let futures: Vec<_> = mcp_servers
@@ -450,8 +512,9 @@ impl AgentSession {
             .map(|server_config| {
                 let name = server_config.name.clone();
                 let timeout = Duration::from_secs(server_config.timeout_secs);
+                let config_ref = server_config.clone();
                 async move {
-                    let client = aivyx_mcp::McpClient::connect(server_config).await?;
+                    let client = aivyx_mcp::McpClient::connect(&config_ref).await?;
                     let client = Arc::new(client);
                     // Apply per-server timeout to the init+list sequence.
                     let result = tokio::time::timeout(timeout, async {
@@ -464,7 +527,7 @@ impl AgentSession {
                             "MCP server '{name}' timed out after {timeout:?}"
                         ))
                     })??;
-                    Ok::<_, AivyxError>((name, client, result))
+                    Ok::<_, AivyxError>((name, client, result, config_ref))
                 }
             })
             .collect();
@@ -474,24 +537,55 @@ impl AgentSession {
         // Register discovered tools sequentially (ToolRegistry is not Send).
         for result in results {
             match result {
-                Ok((name, client, tool_defs)) => {
-                    let count = tool_defs.len();
-                    for def in tool_defs {
-                        let proxy = aivyx_mcp::McpProxyTool::new(
-                            def,
-                            client.clone(),
-                            &name,
-                            Some(cache.clone()),
-                        );
+                Ok((name, client, tool_defs, server_config)) => {
+                    // Track client in pool for lifecycle management.
+                    pool.insert(name.clone(), client.clone(), server_config.clone())
+                        .await;
+
+                    // Filter tools by allow/block configuration.
+                    let filtered: Vec<_> = tool_defs
+                        .into_iter()
+                        .filter(|def| server_config.is_tool_allowed(&def.name))
+                        .collect();
+                    let total = filtered.len();
+                    for mut def in filtered {
+                        // Detect name collisions and prefix with server name.
+                        if tools.has_name(&def.name) {
+                            let prefixed = format!("{}:{}", name, def.name);
+                            tracing::warn!(
+                                "MCP tool '{}' conflicts with existing tool, registering as '{}'",
+                                def.name,
+                                prefixed
+                            );
+                            def.name = prefixed;
+                        }
+                        let proxy = if let Some(obs) = &observer {
+                            aivyx_mcp::McpProxyTool::with_observer(
+                                def,
+                                client.clone(),
+                                &name,
+                                Some(cache.clone()),
+                                obs.clone(),
+                            )
+                        } else {
+                            aivyx_mcp::McpProxyTool::new(
+                                def,
+                                client.clone(),
+                                &name,
+                                Some(cache.clone()),
+                            )
+                        };
                         tools.register(Box::new(proxy));
                     }
-                    tracing::info!("MCP '{}': registered {} tools", name, count);
+                    tracing::info!("MCP '{}': registered {} tools", name, total);
                 }
                 Err(e) => {
                     tracing::warn!("MCP discovery failed: {e}");
                 }
             }
         }
+
+        Some(pool)
     }
 
     /// Create a MemoryManager from embedding configuration.

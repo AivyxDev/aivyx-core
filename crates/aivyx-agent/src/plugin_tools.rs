@@ -205,6 +205,8 @@ impl Tool for PluginInstallTool {
             },
             env: std::collections::HashMap::new(),
             timeout_secs: 30,
+            allowed_tools: None,
+            blocked_tools: None,
         };
 
         let entry = aivyx_config::PluginEntry {

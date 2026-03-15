@@ -79,6 +79,8 @@ mod tests {
                 },
                 env: HashMap::new(),
                 timeout_secs: 30,
+                allowed_tools: None,
+                blocked_tools: None,
             },
             installed_at: Utc::now(),
             enabled: true,

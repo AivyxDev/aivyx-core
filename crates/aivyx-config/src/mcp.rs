@@ -25,6 +25,16 @@ pub struct McpServerConfig {
     /// Defaults to 30 seconds.
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
+    /// Whitelist: only these tool names are registered from this server.
+    /// If `None`, all discovered tools are allowed (unless `blocked_tools` is set).
+    /// Cannot be set together with `blocked_tools`.
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
+    /// Blacklist: these tool names are excluded from registration.
+    /// If `None`, no tools are blocked (unless `allowed_tools` is set).
+    /// Cannot be set together with `allowed_tools`.
+    #[serde(default)]
+    pub blocked_tools: Option<Vec<String>>,
 }
 
 /// Default MCP operation timeout: 30 seconds.
@@ -86,6 +96,35 @@ pub enum McpAuthMethod {
     },
 }
 
+impl McpServerConfig {
+    /// Validate the configuration. Returns an error if both `allowed_tools`
+    /// and `blocked_tools` are set (ambiguous intent).
+    pub fn validate(&self) -> aivyx_core::Result<()> {
+        if self.allowed_tools.is_some() && self.blocked_tools.is_some() {
+            return Err(aivyx_core::AivyxError::Config(format!(
+                "MCP server '{}': cannot set both allowed_tools and blocked_tools",
+                self.name
+            )));
+        }
+        Ok(())
+    }
+
+    /// Check if a tool name passes the allow/block filter.
+    ///
+    /// - If `allowed_tools` is set, only listed names pass.
+    /// - If `blocked_tools` is set, all names except listed ones pass.
+    /// - If neither is set, all names pass (default behavior).
+    pub fn is_tool_allowed(&self, tool_name: &str) -> bool {
+        if let Some(allowed) = &self.allowed_tools {
+            return allowed.iter().any(|a| a == tool_name);
+        }
+        if let Some(blocked) = &self.blocked_tools {
+            return !blocked.iter().any(|b| b == tool_name);
+        }
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +164,8 @@ mod tests {
             },
             env: HashMap::from([("NODE_ENV".into(), "production".into())]),
             timeout_secs: 30,
+            allowed_tools: None,
+            blocked_tools: None,
         };
 
         let toml_str = toml::to_string_pretty(&config).unwrap();
@@ -143,6 +184,8 @@ mod tests {
             },
             env: HashMap::new(),
             timeout_secs: 60,
+            allowed_tools: None,
+            blocked_tools: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -229,5 +272,126 @@ mod tests {
         } else {
             panic!("expected Sse transport");
         }
+    }
+
+    #[test]
+    fn is_tool_allowed_with_allowlist() {
+        let config = McpServerConfig {
+            name: "test".into(),
+            transport: McpTransport::Stdio {
+                command: "echo".into(),
+                args: vec![],
+            },
+            env: HashMap::new(),
+            timeout_secs: 30,
+            allowed_tools: Some(vec!["echo".into(), "read".into()]),
+            blocked_tools: None,
+        };
+        assert!(config.is_tool_allowed("echo"));
+        assert!(config.is_tool_allowed("read"));
+        assert!(!config.is_tool_allowed("dangerous_tool"));
+    }
+
+    #[test]
+    fn is_tool_allowed_with_blocklist() {
+        let config = McpServerConfig {
+            name: "test".into(),
+            transport: McpTransport::Stdio {
+                command: "echo".into(),
+                args: vec![],
+            },
+            env: HashMap::new(),
+            timeout_secs: 30,
+            allowed_tools: None,
+            blocked_tools: Some(vec!["dangerous".into()]),
+        };
+        assert!(config.is_tool_allowed("echo"));
+        assert!(config.is_tool_allowed("read"));
+        assert!(!config.is_tool_allowed("dangerous"));
+    }
+
+    #[test]
+    fn is_tool_allowed_neither_set() {
+        let config = McpServerConfig {
+            name: "test".into(),
+            transport: McpTransport::Stdio {
+                command: "echo".into(),
+                args: vec![],
+            },
+            env: HashMap::new(),
+            timeout_secs: 30,
+            allowed_tools: None,
+            blocked_tools: None,
+        };
+        assert!(config.is_tool_allowed("anything"));
+    }
+
+    #[test]
+    fn validate_rejects_both_allow_and_block() {
+        let config = McpServerConfig {
+            name: "bad".into(),
+            transport: McpTransport::Stdio {
+                command: "echo".into(),
+                args: vec![],
+            },
+            env: HashMap::new(),
+            timeout_secs: 30,
+            allowed_tools: Some(vec!["a".into()]),
+            blocked_tools: Some(vec!["b".into()]),
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_only_allow() {
+        let config = McpServerConfig {
+            name: "ok".into(),
+            transport: McpTransport::Stdio {
+                command: "echo".into(),
+                args: vec![],
+            },
+            env: HashMap::new(),
+            timeout_secs: 30,
+            allowed_tools: Some(vec!["a".into()]),
+            blocked_tools: None,
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn tool_filter_fields_backward_compatible() {
+        // Old configs without allowed_tools/blocked_tools should still parse
+        let toml_str = r#"
+            name = "legacy"
+            [transport]
+            type = "stdio"
+            command = "echo"
+        "#;
+        let config: McpServerConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.allowed_tools.is_none());
+        assert!(config.blocked_tools.is_none());
+        assert!(config.is_tool_allowed("any_tool"));
+    }
+
+    #[test]
+    fn tool_filter_fields_toml_roundtrip() {
+        let toml_str = r#"
+            name = "filtered"
+            allowed_tools = ["echo", "search"]
+            [transport]
+            type = "stdio"
+            command = "npx"
+        "#;
+        let config: McpServerConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.allowed_tools,
+            Some(vec!["echo".into(), "search".into()])
+        );
+        assert!(config.blocked_tools.is_none());
+
+        // Roundtrip through TOML
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let restored: McpServerConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(restored.allowed_tools, config.allowed_tools);
     }
 }
