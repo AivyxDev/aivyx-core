@@ -12,6 +12,7 @@ use crate::embedding::EmbeddingConfig;
 use crate::heartbeat::HeartbeatConfig;
 use crate::memory::MemoryConfig;
 use crate::nexus::NexusConfig;
+use crate::otel::OtelConfig;
 use crate::plugin::PluginEntry;
 use crate::project::ProjectConfig;
 use crate::provider::ProviderConfig;
@@ -26,6 +27,7 @@ pub struct AivyxConfig {
     /// Which LLM provider to use and how to reach it.
     pub provider: ProviderConfig,
     /// Agent autonomy constraints and rate limits.
+    #[serde(default)]
     pub autonomy: AutonomyPolicy,
     /// Embedding provider for the memory system.
     /// `None` means memory features use the default (Ollama, nomic-embed-text).
@@ -135,6 +137,13 @@ pub struct AivyxConfig {
     /// `None` means Nexus is disabled. Stored as `[nexus]` in TOML.
     #[serde(default)]
     pub nexus: Option<NexusConfig>,
+    /// OpenTelemetry distributed tracing configuration.
+    ///
+    /// When present, enables OTel trace export to any compatible backend
+    /// (Langfuse, Datadog, Grafana Tempo, Jaeger). `None` means OTel is
+    /// disabled. Stored as `[otel]` in TOML.
+    #[serde(default)]
+    pub otel: Option<OtelConfig>,
 }
 
 impl AivyxConfig {

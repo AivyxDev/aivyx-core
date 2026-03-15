@@ -346,6 +346,16 @@ impl Agent {
     }
 
     /// Execute a single turn with multimodal content (text + images).
+    #[tracing::instrument(
+        name = "invoke_agent",
+        skip_all,
+        fields(
+            gen_ai.agent.id = %self.id,
+            gen_ai.agent.name = %self.name,
+            gen_ai.session.id = %self.session_id,
+            gen_ai.operation.name = "turn",
+        )
+    )]
     pub async fn turn_with_content(
         &mut self,
         content: Content,
@@ -475,6 +485,16 @@ impl Agent {
     }
 
     /// Execute a single turn with streaming and multimodal content.
+    #[tracing::instrument(
+        name = "invoke_agent",
+        skip_all,
+        fields(
+            gen_ai.agent.id = %self.id,
+            gen_ai.agent.name = %self.name,
+            gen_ai.session.id = %self.session_id,
+            gen_ai.operation.name = "turn_stream",
+        )
+    )]
     pub async fn turn_stream_with_content(
         &mut self,
         content: Content,
@@ -686,11 +706,26 @@ impl Agent {
         }
     }
 
+    #[tracing::instrument(
+        name = "gen_ai.chat",
+        skip_all,
+        fields(
+            gen_ai.system = %self.provider.name(),
+            gen_ai.operation.name = "chat",
+            gen_ai.usage.input_tokens = tracing::field::Empty,
+            gen_ai.usage.output_tokens = tracing::field::Empty,
+        )
+    )]
     async fn chat_with_retry(&self, request: &ChatRequest) -> Result<ChatResponse> {
         let mut attempt = 0;
         loop {
             match self.provider.chat(request).await {
-                Ok(r) => return Ok(r),
+                Ok(r) => {
+                    let span = tracing::Span::current();
+                    span.record("gen_ai.usage.input_tokens", r.usage.input_tokens);
+                    span.record("gen_ai.usage.output_tokens", r.usage.output_tokens);
+                    return Ok(r);
+                }
                 Err(e) if e.is_retryable() && attempt < self.max_retries => {
                     attempt += 1;
                     let delay = self
@@ -725,6 +760,15 @@ impl Agent {
         Ok(results)
     }
 
+    #[tracing::instrument(
+        name = "tool_call",
+        skip_all,
+        fields(
+            gen_ai.tool.name = %tc.name,
+            gen_ai.tool.call_id = %tc.id,
+            gen_ai.agent.id = %self.id,
+        )
+    )]
     async fn execute_single_tool(
         &mut self,
         tc: &ToolCall,
