@@ -155,6 +155,16 @@ impl Tool for WebSearchTool {
 
         let results = Self::parse_results(&html);
 
+        // Warn if parsing yielded no results despite receiving a non-trivial
+        // HTML response — likely means DuckDuckGo changed their markup.
+        if results.is_empty() && html.len() > 1000 {
+            tracing::warn!(
+                "web_search: HTML parsing returned 0 results from {} bytes — \
+                 DuckDuckGo markup may have changed",
+                html.len()
+            );
+        }
+
         Ok(serde_json::json!({
             "query": query,
             "results": results,

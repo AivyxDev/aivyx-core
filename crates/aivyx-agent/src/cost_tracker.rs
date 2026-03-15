@@ -202,4 +202,87 @@ mod tests {
             })
             .unwrap();
     }
+
+    #[test]
+    fn track_with_category_attributes_costs() {
+        let mut tracker = CostTracker::new(100.0, 0.000003, 0.000015);
+
+        tracker
+            .track_with_category(
+                &TokenUsage {
+                    input_tokens: 1000,
+                    output_tokens: 500,
+                },
+                "turn",
+            )
+            .unwrap();
+
+        tracker
+            .track_with_category(
+                &TokenUsage {
+                    input_tokens: 200,
+                    output_tokens: 100,
+                },
+                "compression",
+            )
+            .unwrap();
+
+        tracker
+            .track_with_category(
+                &TokenUsage {
+                    input_tokens: 300,
+                    output_tokens: 150,
+                },
+                "extraction",
+            )
+            .unwrap();
+
+        // Second turn call to test aggregation within a category
+        tracker
+            .track_with_category(
+                &TokenUsage {
+                    input_tokens: 500,
+                    output_tokens: 250,
+                },
+                "turn",
+            )
+            .unwrap();
+
+        let cats = tracker.cost_by_category();
+        assert_eq!(cats.len(), 3);
+
+        let turn = &cats["turn"];
+        assert_eq!(turn.input_tokens, 1500);
+        assert_eq!(turn.output_tokens, 750);
+        assert_eq!(turn.call_count, 2);
+        assert!(turn.cost_usd > 0.0);
+
+        let compression = &cats["compression"];
+        assert_eq!(compression.input_tokens, 200);
+        assert_eq!(compression.call_count, 1);
+
+        let extraction = &cats["extraction"];
+        assert_eq!(extraction.input_tokens, 300);
+        assert_eq!(extraction.call_count, 1);
+
+        // Total should equal sum of categories
+        assert_eq!(tracker.total_input_tokens(), 2000);
+        assert_eq!(tracker.total_output_tokens(), 1000);
+    }
+
+    #[test]
+    fn track_defaults_to_turn_category() {
+        let mut tracker = CostTracker::new(100.0, 0.000003, 0.000015);
+        tracker
+            .track(&TokenUsage {
+                input_tokens: 100,
+                output_tokens: 50,
+            })
+            .unwrap();
+
+        let cats = tracker.cost_by_category();
+        assert_eq!(cats.len(), 1);
+        assert!(cats.contains_key("turn"));
+        assert_eq!(cats["turn"].call_count, 1);
+    }
 }

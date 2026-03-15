@@ -699,4 +699,58 @@ mod tests {
         let parsed: Persona = toml::from_str(&toml_str).unwrap();
         assert_eq!(original, parsed);
     }
+
+    #[test]
+    fn nonagon_presets_produce_distinct_souls() {
+        // Verify each Nonagon preset generates meaningfully different system prompts.
+        let nonagon_roles = [
+            "coordinator",
+            "nonagon-researcher",
+            "analyst",
+            "nonagon-coder",
+            "reviewer",
+            "nonagon-writer",
+            "planner",
+            "guardian",
+            "executor",
+        ];
+
+        let mut souls: Vec<(String, String)> = Vec::new();
+        for role in &nonagon_roles {
+            let persona = Persona::for_role(role).unwrap();
+            let soul = persona.generate_soul(role);
+            souls.push((role.to_string(), soul));
+        }
+
+        // Each pair should differ (no two roles produce the same prompt)
+        for i in 0..souls.len() {
+            for j in (i + 1)..souls.len() {
+                assert_ne!(
+                    souls[i].1, souls[j].1,
+                    "Nonagon presets '{}' and '{}' produce identical souls",
+                    souls[i].0, souls[j].0
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nonagon_presets_have_role_specific_tones() {
+        // Verify key persona attributes differentiate the roles as intended.
+        let coordinator = Persona::for_role("coordinator").unwrap();
+        let guardian = Persona::for_role("guardian").unwrap();
+        let executor = Persona::for_role("executor").unwrap();
+
+        // Coordinator: highest confidence, asks followups
+        assert!(coordinator.confidence >= 0.9);
+        assert!(coordinator.asks_followups);
+
+        // Guardian: highest formality, security-focused
+        assert!(guardian.formality >= 0.8);
+        assert!(guardian.tone.as_ref().unwrap().contains("security"));
+
+        // Executor: lowest verbosity, action-oriented
+        assert!(executor.verbosity <= 0.2);
+        assert!(!executor.asks_followups);
+    }
 }
