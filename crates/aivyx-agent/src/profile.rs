@@ -31,6 +31,11 @@ pub struct AgentProfile {
     /// `None` uses the global `[provider]` config.
     #[serde(default)]
     pub provider: Option<String>,
+    /// Ordered fallback provider names from config `[providers]`.
+    /// Used when the primary provider's circuit breaker opens.
+    /// Empty means no fallback (current behavior).
+    #[serde(default)]
+    pub fallback_providers: Vec<String>,
     /// Maximum tokens for LLM responses.
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
@@ -119,6 +124,7 @@ impl AgentProfile {
             skills: Vec::new(),
             autonomy_tier: None,
             provider: None,
+            fallback_providers: Vec::new(),
             max_tokens: default_max_tokens(),
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
@@ -208,6 +214,7 @@ impl AgentProfile {
             ],
             autonomy_tier: None,
             provider: None,
+            fallback_providers: Vec::new(),
             max_tokens: 8192,
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
@@ -251,6 +258,7 @@ impl AgentProfile {
             ],
             autonomy_tier: None,
             provider: None,
+            fallback_providers: Vec::new(),
             max_tokens: 8192,
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
@@ -287,6 +295,7 @@ impl AgentProfile {
             ],
             autonomy_tier: None,
             provider: None,
+            fallback_providers: Vec::new(),
             max_tokens: 8192,
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),
@@ -316,6 +325,7 @@ impl AgentProfile {
             ],
             autonomy_tier: None,
             provider: None,
+            fallback_providers: Vec::new(),
             max_tokens: 8192,
             capabilities: vec![
                 ProfileCapability {
@@ -367,6 +377,7 @@ impl AgentProfile {
             ],
             autonomy_tier: Some(AutonomyTier::Leash),
             provider: None,
+            fallback_providers: Vec::new(),
             max_tokens: 8192,
             capabilities: default_capabilities(),
             mcp_servers: Vec::new(),

@@ -5,7 +5,9 @@ use aivyx_core::{AgentId, AivyxError, CapabilityId, Principal, Result, ToolRegis
 #[cfg(feature = "network-tools")]
 use aivyx_crypto::derive_tool_key;
 use aivyx_crypto::{EncryptedStore, MasterKey, derive_audit_key, derive_memory_key};
+use aivyx_llm::circuit_breaker::CircuitBreakerConfig;
 use aivyx_llm::create_provider;
+use aivyx_llm::resilient::{FailoverObserver, ProviderEvent, ResilientProvider};
 use chrono::Utc;
 
 use crate::agent::Agent;
@@ -150,14 +152,97 @@ impl AgentSession {
             std::sync::Arc<tokio::sync::Mutex<aivyx_memory::MemoryManager>>,
         >,
     ) -> Result<Agent> {
+        let agent_id = AgentId::new();
+
         // Create LLM provider (per-agent override or global default).
         // Scope the EncryptedStore so its redb lock is released before the
         // memory manager opens its own handle on the same database.
-        let (provider, provider_config) = {
+        let (provider, provider_config): (Box<dyn aivyx_llm::provider::LlmProvider>, _) = {
             let store = EncryptedStore::open(self.dirs.store_path())?;
             let pc = self.config.resolve_provider(profile.provider.as_deref());
             let prov = create_provider(pc, &store, &self.master_key)?;
-            (prov, pc.clone())
+            let provider_config = pc.clone();
+
+            if profile.fallback_providers.is_empty() {
+                // No fallbacks — use provider directly (current behavior).
+                (prov, provider_config)
+            } else {
+                // Build resilient provider with circuit breaker and fallbacks.
+                let cb = &self.config.autonomy.circuit_breaker;
+                let cb_config = CircuitBreakerConfig {
+                    failure_threshold: cb.failure_threshold,
+                    recovery_timeout: std::time::Duration::from_secs(cb.recovery_timeout_secs),
+                    success_threshold: cb.success_threshold,
+                };
+
+                let primary_name = profile.provider.as_deref().unwrap_or("default").to_string();
+
+                let mut resilient = ResilientProvider::new(prov, primary_name, cb_config.clone());
+
+                for fb_name in &profile.fallback_providers {
+                    let fb_pc = self.config.resolve_provider(Some(fb_name));
+                    match create_provider(fb_pc, &store, &self.master_key) {
+                        Ok(fb_prov) => {
+                            resilient = resilient.with_fallback(
+                                fb_prov,
+                                fb_name.clone(),
+                                cb_config.clone(),
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                fallback = %fb_name,
+                                error = %e,
+                                "Failed to create fallback provider, skipping"
+                            );
+                        }
+                    }
+                }
+
+                // Wire failover observer to bridge provider events → audit log.
+                let fo_audit_key = derive_audit_key(&self.master_key);
+                let fo_audit_log = AuditLog::new(self.dirs.audit_path(), &fo_audit_key);
+                let fo_agent_id = agent_id;
+                let observer: FailoverObserver =
+                    std::sync::Arc::new(move |event: ProviderEvent| {
+                        let audit_event = match event {
+                            ProviderEvent::CircuitOpened { provider, failures } => {
+                                AuditEvent::ProviderCircuitOpened {
+                                    provider,
+                                    consecutive_failures: failures,
+                                    agent_id: fo_agent_id,
+                                    timestamp: Utc::now(),
+                                }
+                            }
+                            ProviderEvent::FailoverActivated { from, to } => {
+                                AuditEvent::ProviderFailover {
+                                    from_provider: from,
+                                    to_provider: to,
+                                    agent_id: fo_agent_id,
+                                    timestamp: Utc::now(),
+                                }
+                            }
+                            ProviderEvent::CircuitClosed { provider } => {
+                                AuditEvent::ProviderCircuitClosed {
+                                    provider,
+                                    agent_id: fo_agent_id,
+                                    timestamp: Utc::now(),
+                                }
+                            }
+                            ProviderEvent::AllProvidersDown => {
+                                tracing::error!("All LLM providers are down");
+                                return;
+                            }
+                        };
+                        if let Err(e) = fo_audit_log.append(audit_event) {
+                            tracing::warn!("Failed to audit provider failover event: {e}");
+                        }
+                    });
+
+                resilient = resilient.with_observer(observer);
+
+                (Box::new(resilient), provider_config)
+            }
         };
 
         // Set up tool registry
@@ -165,7 +250,6 @@ impl AgentSession {
         register_built_in_tools(&mut tools, &profile.tool_ids);
 
         // Build capability set from profile entries.
-        let agent_id = AgentId::new();
         let capabilities = Self::build_capabilities(&profile.capabilities, agent_id);
 
         // Wire memory tools into the registry before Agent::new() consumes it.

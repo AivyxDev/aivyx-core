@@ -21,7 +21,7 @@ pub mod skill;
 pub mod smtp;
 pub mod speech;
 
-pub use autonomy_policy::AutonomyPolicy;
+pub use autonomy_policy::{AutonomyPolicy, CircuitBreakerPolicy};
 pub use channel::{ChannelConfig, ChannelPlatform};
 pub use config::{
     AivyxConfig, BackupConfig, BillingConfig, DefaultQuotas, GroupRoleMappingConfig,

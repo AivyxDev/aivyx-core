@@ -172,6 +172,26 @@ pub enum AuditEvent {
         error: String,
         timestamp: DateTime<Utc>,
     },
+    /// An LLM provider's circuit breaker opened (provider considered down).
+    ProviderCircuitOpened {
+        provider: String,
+        consecutive_failures: u32,
+        agent_id: AgentId,
+        timestamp: DateTime<Utc>,
+    },
+    /// Traffic was routed from a failed LLM provider to a fallback.
+    ProviderFailover {
+        from_provider: String,
+        to_provider: String,
+        agent_id: AgentId,
+        timestamp: DateTime<Utc>,
+    },
+    /// An LLM provider's circuit breaker closed (provider recovered).
+    ProviderCircuitClosed {
+        provider: String,
+        agent_id: AgentId,
+        timestamp: DateTime<Utc>,
+    },
     /// A tool result was served from cache instead of executing.
     ToolCacheHit {
         tool_name: String,
@@ -800,6 +820,65 @@ mod tests {
             assert_eq!(server_name, "fs-server");
             assert_eq!(tool_name, "write_file");
             assert_eq!(error, "permission denied");
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn provider_circuit_opened_serde_roundtrip() {
+        let event = AuditEvent::ProviderCircuitOpened {
+            provider: "claude".into(),
+            consecutive_failures: 3,
+            agent_id: AgentId::new(),
+            timestamp: Utc::now(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::ProviderCircuitOpened {
+            provider,
+            consecutive_failures,
+            ..
+        } = restored
+        {
+            assert_eq!(provider, "claude");
+            assert_eq!(consecutive_failures, 3);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn provider_failover_serde_roundtrip() {
+        let event = AuditEvent::ProviderFailover {
+            from_provider: "claude".into(),
+            to_provider: "openai".into(),
+            agent_id: AgentId::new(),
+            timestamp: Utc::now(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::ProviderFailover {
+            from_provider,
+            to_provider,
+            ..
+        } = restored
+        {
+            assert_eq!(from_provider, "claude");
+            assert_eq!(to_provider, "openai");
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn provider_circuit_closed_serde_roundtrip() {
+        let event = AuditEvent::ProviderCircuitClosed {
+            provider: "claude".into(),
+            agent_id: AgentId::new(),
+            timestamp: Utc::now(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::ProviderCircuitClosed { provider, .. } = restored {
+            assert_eq!(provider, "claude");
         } else {
             panic!("wrong variant");
         }
