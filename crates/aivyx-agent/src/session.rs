@@ -155,214 +155,222 @@ impl AgentSession {
     ) -> Result<Agent> {
         let agent_id = AgentId::new();
 
+        // Single shared audit log for all observers in this agent's lifecycle.
+        // Each observer captures an Arc clone — avoids redundant key derivation
+        // and file handle creation (was 6-8 separate instances before).
+        let audit_key = derive_audit_key(&self.master_key);
+        let shared_audit = std::sync::Arc::new(AuditLog::new(self.dirs.audit_path(), &audit_key));
+
         // Create LLM provider (per-agent override or global default).
         // Scope the EncryptedStore so its redb lock is released before the
         // memory manager opens its own handle on the same database.
+        // The store stays open through provider + routing + cache creation,
+        // then drops before memory manager setup.
         let (provider, provider_config): (Box<dyn aivyx_llm::provider::LlmProvider>, _) = {
             let store = EncryptedStore::open(self.dirs.store_path())?;
             let pc = self.config.resolve_provider(profile.provider.as_deref());
             let prov = create_provider(pc, &store, &self.master_key)?;
             let provider_config = pc.clone();
 
-            if profile.fallback_providers.is_empty() {
-                // No fallbacks — use provider directly (current behavior).
-                (prov, provider_config)
-            } else {
-                // Build resilient provider with circuit breaker and fallbacks.
-                let cb = &self.config.autonomy.circuit_breaker;
-                let cb_config = CircuitBreakerConfig {
-                    failure_threshold: cb.failure_threshold,
-                    recovery_timeout: std::time::Duration::from_secs(cb.recovery_timeout_secs),
-                    success_threshold: cb.success_threshold,
+            let provider: Box<dyn aivyx_llm::provider::LlmProvider> =
+                if profile.fallback_providers.is_empty() {
+                    prov
+                } else {
+                    // Build resilient provider with circuit breaker and fallbacks.
+                    let cb = &self.config.autonomy.circuit_breaker;
+                    let cb_config = CircuitBreakerConfig {
+                        failure_threshold: cb.failure_threshold,
+                        recovery_timeout: std::time::Duration::from_secs(cb.recovery_timeout_secs),
+                        success_threshold: cb.success_threshold,
+                    };
+
+                    let primary_name = profile.provider.as_deref().unwrap_or("default").to_string();
+
+                    let mut resilient =
+                        ResilientProvider::new(prov, primary_name, cb_config.clone());
+
+                    for fb_name in &profile.fallback_providers {
+                        let fb_pc = self.config.resolve_provider(Some(fb_name));
+                        match create_provider(fb_pc, &store, &self.master_key) {
+                            Ok(fb_prov) => {
+                                resilient = resilient.with_fallback(
+                                    fb_prov,
+                                    fb_name.clone(),
+                                    cb_config.clone(),
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    fallback = %fb_name,
+                                    error = %e,
+                                    "Failed to create fallback provider, skipping"
+                                );
+                            }
+                        }
+                    }
+
+                    // Wire failover observer to bridge provider events → audit log.
+                    let fo_audit_log = std::sync::Arc::clone(&shared_audit);
+                    let fo_agent_id = agent_id;
+                    let observer: FailoverObserver =
+                        std::sync::Arc::new(move |event: ProviderEvent| {
+                            let audit_event = match event {
+                                ProviderEvent::CircuitOpened { provider, failures } => {
+                                    AuditEvent::ProviderCircuitOpened {
+                                        provider,
+                                        consecutive_failures: failures,
+                                        agent_id: fo_agent_id,
+                                        timestamp: Utc::now(),
+                                    }
+                                }
+                                ProviderEvent::FailoverActivated { from, to } => {
+                                    AuditEvent::ProviderFailover {
+                                        from_provider: from,
+                                        to_provider: to,
+                                        agent_id: fo_agent_id,
+                                        timestamp: Utc::now(),
+                                    }
+                                }
+                                ProviderEvent::CircuitClosed { provider } => {
+                                    AuditEvent::ProviderCircuitClosed {
+                                        provider,
+                                        agent_id: fo_agent_id,
+                                        timestamp: Utc::now(),
+                                    }
+                                }
+                                ProviderEvent::AllProvidersDown => {
+                                    tracing::error!("All LLM providers are down");
+                                    return;
+                                }
+                            };
+                            if let Err(e) = fo_audit_log.append(audit_event) {
+                                tracing::warn!("Failed to audit provider failover event: {e}");
+                            }
+                        });
+
+                    resilient = resilient.with_observer(observer);
+
+                    Box::new(resilient)
                 };
 
-                let primary_name = profile.provider.as_deref().unwrap_or("default").to_string();
-
-                let mut resilient = ResilientProvider::new(prov, primary_name, cb_config.clone());
-
-                for fb_name in &profile.fallback_providers {
-                    let fb_pc = self.config.resolve_provider(Some(fb_name));
-                    match create_provider(fb_pc, &store, &self.master_key) {
-                        Ok(fb_prov) => {
-                            resilient = resilient.with_fallback(
-                                fb_prov,
-                                fb_name.clone(),
-                                cb_config.clone(),
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                fallback = %fb_name,
-                                error = %e,
-                                "Failed to create fallback provider, skipping"
-                            );
+            // --- Routing layer (reuses the same store) ---
+            let routing_config = profile.routing.as_ref().or(self.config.routing.as_ref());
+            let provider: Box<dyn aivyx_llm::provider::LlmProvider> =
+                if let Some(rc) = routing_config {
+                    let mut tier_providers = std::collections::HashMap::new();
+                    for (level, name) in [
+                        (aivyx_llm::ComplexityLevel::Simple, &rc.simple),
+                        (aivyx_llm::ComplexityLevel::Medium, &rc.medium),
+                        (aivyx_llm::ComplexityLevel::Complex, &rc.complex),
+                    ] {
+                        if let Some(provider_name) = name {
+                            let pc = self.config.resolve_provider(Some(provider_name));
+                            match create_provider(pc, &store, &self.master_key) {
+                                Ok(p) => {
+                                    tier_providers.insert(level, p);
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        level = ?level,
+                                        provider = %provider_name,
+                                        error = %e,
+                                        "Failed to create routing provider, using default"
+                                    );
+                                }
+                            }
                         }
                     }
-                }
 
-                // Wire failover observer to bridge provider events → audit log.
-                let fo_audit_key = derive_audit_key(&self.master_key);
-                let fo_audit_log = AuditLog::new(self.dirs.audit_path(), &fo_audit_key);
-                let fo_agent_id = agent_id;
-                let observer: FailoverObserver =
-                    std::sync::Arc::new(move |event: ProviderEvent| {
-                        let audit_event = match event {
-                            ProviderEvent::CircuitOpened { provider, failures } => {
-                                AuditEvent::ProviderCircuitOpened {
+                    if tier_providers.is_empty() {
+                        provider
+                    } else {
+                        let rt_audit_log = std::sync::Arc::clone(&shared_audit);
+                        let rt_agent_id = agent_id;
+                        let observer: aivyx_llm::RoutingObserver =
+                            std::sync::Arc::new(move |event: aivyx_llm::RoutingEvent| {
+                                let aivyx_llm::RoutingEvent::Routed {
+                                    complexity,
                                     provider,
-                                    consecutive_failures: failures,
-                                    agent_id: fo_agent_id,
-                                    timestamp: Utc::now(),
-                                }
-                            }
-                            ProviderEvent::FailoverActivated { from, to } => {
-                                AuditEvent::ProviderFailover {
-                                    from_provider: from,
-                                    to_provider: to,
-                                    agent_id: fo_agent_id,
-                                    timestamp: Utc::now(),
-                                }
-                            }
-                            ProviderEvent::CircuitClosed { provider } => {
-                                AuditEvent::ProviderCircuitClosed {
+                                } = event;
+                                if let Err(e) = rt_audit_log.append(AuditEvent::ModelRouted {
+                                    agent_id: rt_agent_id,
+                                    complexity: format!("{complexity}"),
                                     provider,
-                                    agent_id: fo_agent_id,
                                     timestamp: Utc::now(),
+                                }) {
+                                    tracing::warn!("Failed to audit routing event: {e}");
                                 }
-                            }
-                            ProviderEvent::AllProvidersDown => {
-                                tracing::error!("All LLM providers are down");
-                                return;
-                            }
-                        };
-                        if let Err(e) = fo_audit_log.append(audit_event) {
-                            tracing::warn!("Failed to audit provider failover event: {e}");
-                        }
-                    });
-
-                resilient = resilient.with_observer(observer);
-
-                (Box::new(resilient), provider_config)
-            }
-        };
-
-        // Wrap provider in RoutingProvider if routing config is present.
-        let routing_config = profile.routing.as_ref().or(self.config.routing.as_ref());
-        let provider: Box<dyn aivyx_llm::provider::LlmProvider> = if let Some(rc) = routing_config {
-            let store = EncryptedStore::open(self.dirs.store_path())?;
-            let mut tier_providers = std::collections::HashMap::new();
-
-            for (level, name) in [
-                (aivyx_llm::ComplexityLevel::Simple, &rc.simple),
-                (aivyx_llm::ComplexityLevel::Medium, &rc.medium),
-                (aivyx_llm::ComplexityLevel::Complex, &rc.complex),
-            ] {
-                if let Some(provider_name) = name {
-                    let pc = self.config.resolve_provider(Some(provider_name));
-                    match create_provider(pc, &store, &self.master_key) {
-                        Ok(p) => {
-                            tier_providers.insert(level, p);
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                level = ?level,
-                                provider = %provider_name,
-                                error = %e,
-                                "Failed to create routing provider, using default"
-                            );
-                        }
+                            });
+                        let routing = aivyx_llm::RoutingProvider::new(provider, tier_providers)
+                            .with_observer(observer);
+                        Box::new(routing)
                     }
-                }
-            }
+                } else {
+                    provider
+                };
 
-            if tier_providers.is_empty() {
-                provider
-            } else {
-                let rt_audit_key = derive_audit_key(&self.master_key);
-                let rt_audit_log = AuditLog::new(self.dirs.audit_path(), &rt_audit_key);
-                let rt_agent_id = agent_id;
-                let observer: aivyx_llm::RoutingObserver =
-                    std::sync::Arc::new(move |event: aivyx_llm::RoutingEvent| {
-                        let aivyx_llm::RoutingEvent::Routed {
-                            complexity,
-                            provider,
-                        } = event;
-                        if let Err(e) = rt_audit_log.append(AuditEvent::ModelRouted {
-                            agent_id: rt_agent_id,
-                            complexity: format!("{complexity}"),
-                            provider,
-                            timestamp: Utc::now(),
-                        }) {
-                            tracing::warn!("Failed to audit routing event: {e}");
-                        }
-                    });
-                let routing = aivyx_llm::RoutingProvider::new(provider, tier_providers)
-                    .with_observer(observer);
-                Box::new(routing)
-            }
-        } else {
-            provider
-        };
+            // --- Caching layer (reuses the same store for embedding provider) ---
+            let cache_config = profile.cache.as_ref().or(self.config.cache.as_ref());
+            let provider: Box<dyn aivyx_llm::provider::LlmProvider> = if let Some(cc) = cache_config
+            {
+                if cc.enabled {
+                    let mut caching = CachingProvider::new(provider, cc);
 
-        // Wrap provider in CachingProvider if cache is configured.
-        let cache_config = profile.cache.as_ref().or(self.config.cache.as_ref());
-        let provider: Box<dyn aivyx_llm::provider::LlmProvider> = if let Some(cc) = cache_config {
-            if cc.enabled {
-                let mut caching = CachingProvider::new(provider, cc);
-
-                // Wire semantic cache if embedding provider is available.
-                if cc.semantic_enabled
-                    && let Some(ref emb_config) = self.config.embedding
-                {
-                    let store = EncryptedStore::open(self.dirs.store_path())?;
-                    match aivyx_llm::create_embedding_provider(emb_config, &store, &self.master_key)
+                    if cc.semantic_enabled
+                        && let Some(ref emb_config) = self.config.embedding
                     {
-                        Ok(emb) => {
-                            caching = caching.with_semantic(std::sync::Arc::from(emb));
-                        }
-                        Err(e) => {
-                            tracing::warn!("Semantic cache disabled: {e}");
+                        match aivyx_llm::create_embedding_provider(
+                            emb_config,
+                            &store,
+                            &self.master_key,
+                        ) {
+                            Ok(emb) => {
+                                caching = caching.with_semantic(std::sync::Arc::from(emb));
+                            }
+                            Err(e) => {
+                                tracing::warn!("Semantic cache disabled: {e}");
+                            }
                         }
                     }
+
+                    let cache_audit_log = std::sync::Arc::clone(&shared_audit);
+                    let cache_agent_id = agent_id;
+                    let cache_observer: CacheObserver =
+                        std::sync::Arc::new(move |event: CacheEvent| {
+                            let audit_event = match event {
+                                CacheEvent::PromptCacheHit {
+                                    prompt_hash,
+                                    tokens_saved,
+                                } => AuditEvent::PromptCacheHit {
+                                    prompt_hash,
+                                    tokens_saved,
+                                    agent_id: cache_agent_id,
+                                },
+                                CacheEvent::SemanticCacheHit {
+                                    similarity,
+                                    tokens_saved,
+                                } => AuditEvent::SemanticCacheHit {
+                                    similarity,
+                                    tokens_saved,
+                                    agent_id: cache_agent_id,
+                                },
+                            };
+                            if let Err(e) = cache_audit_log.append(audit_event) {
+                                tracing::warn!("Failed to audit cache event: {e}");
+                            }
+                        });
+
+                    caching = caching.with_observer(cache_observer);
+                    Box::new(caching)
+                } else {
+                    provider
                 }
-
-                // Wire cache observer → audit log.
-                let cache_audit_key = derive_audit_key(&self.master_key);
-                let cache_audit_log = AuditLog::new(self.dirs.audit_path(), &cache_audit_key);
-                let cache_agent_id = agent_id;
-                let cache_observer: CacheObserver =
-                    std::sync::Arc::new(move |event: CacheEvent| {
-                        let audit_event = match event {
-                            CacheEvent::PromptCacheHit {
-                                prompt_hash,
-                                tokens_saved,
-                            } => AuditEvent::PromptCacheHit {
-                                prompt_hash,
-                                tokens_saved,
-                                agent_id: cache_agent_id,
-                            },
-                            CacheEvent::SemanticCacheHit {
-                                similarity,
-                                tokens_saved,
-                            } => AuditEvent::SemanticCacheHit {
-                                similarity,
-                                tokens_saved,
-                                agent_id: cache_agent_id,
-                            },
-                        };
-                        if let Err(e) = cache_audit_log.append(audit_event) {
-                            tracing::warn!("Failed to audit cache event: {e}");
-                        }
-                    });
-
-                caching = caching.with_observer(cache_observer);
-                Box::new(caching)
             } else {
                 provider
-            }
-        } else {
-            provider
-        };
+            };
+
+            (provider, provider_config)
+        }; // store lock released here — before memory manager opens its handle
 
         // Set up tool registry
         let mut tools = ToolRegistry::new();
@@ -406,16 +414,11 @@ impl AgentSession {
             None
         };
 
-        // Audit log — created before MCP discovery so the observer can use it.
-        let audit_key = derive_audit_key(&self.master_key);
-        let audit_log = AuditLog::new(self.dirs.audit_path(), &audit_key);
-
         // Discover and register MCP tools from configured servers.
         #[cfg(feature = "mcp")]
         let mcp_pool = {
             // Build an observer that bridges MCP tool call events to the audit log.
-            let mcp_audit_key = derive_audit_key(&self.master_key);
-            let mcp_audit_log = AuditLog::new(self.dirs.audit_path(), &mcp_audit_key);
+            let mcp_audit_log = std::sync::Arc::clone(&shared_audit);
             let obs_agent_id = agent_id;
             let observer: aivyx_mcp::McpToolCallObserver = std::sync::Arc::new(move |event| {
                 let audit_event = match event {
@@ -513,7 +516,7 @@ impl AgentSession {
             capabilities,
             rate_limiter,
             cost_tracker,
-            Some(audit_log),
+            Some(AuditLog::new(self.dirs.audit_path(), &audit_key)),
             self.config.autonomy.max_retries,
             self.config.autonomy.retry_base_delay_ms,
         );
@@ -535,15 +538,16 @@ impl AgentSession {
             self.dirs.clone(),
             profile.name.clone(),
         )));
-        {
-            let self_audit_key = derive_audit_key(&self.master_key);
-            let self_audit_log = AuditLog::new(self.dirs.audit_path(), &self_audit_key);
-            agent.register_tool(Box::new(crate::self_tools::SelfUpdateTool::new(
-                self.dirs.clone(),
-                profile.name.clone(),
-                Some(self_audit_log),
-            )));
-        }
+        agent.register_tool(Box::new(crate::self_tools::SelfUpdateTool::new(
+            self.dirs.clone(),
+            profile.name.clone(),
+            Some(AuditLog::new(self.dirs.audit_path(), &audit_key)),
+        )));
+        agent.register_tool(Box::new(crate::self_tools::SkillCreateTool::new(
+            self.dirs.clone(),
+            profile.name.clone(),
+            Some(AuditLog::new(self.dirs.audit_path(), &audit_key)),
+        )));
 
         // Discover SKILL.md skills from user-global directory.
         {
@@ -575,22 +579,14 @@ impl AgentSession {
         agent.register_tool(Box::new(crate::plugin_tools::PluginListTool::new(
             self.dirs.clone(),
         )));
-        {
-            let plugin_audit_key = derive_audit_key(&self.master_key);
-            let plugin_audit_log = AuditLog::new(self.dirs.audit_path(), &plugin_audit_key);
-            agent.register_tool(Box::new(crate::plugin_tools::PluginInstallTool::new(
-                self.dirs.clone(),
-                Some(plugin_audit_log),
-            )));
-        }
-        {
-            let remove_audit_key = derive_audit_key(&self.master_key);
-            let remove_audit_log = AuditLog::new(self.dirs.audit_path(), &remove_audit_key);
-            agent.register_tool(Box::new(crate::plugin_tools::PluginRemoveTool::new(
-                self.dirs.clone(),
-                Some(remove_audit_log),
-            )));
-        }
+        agent.register_tool(Box::new(crate::plugin_tools::PluginInstallTool::new(
+            self.dirs.clone(),
+            Some(AuditLog::new(self.dirs.audit_path(), &audit_key)),
+        )));
+        agent.register_tool(Box::new(crate::plugin_tools::PluginRemoveTool::new(
+            self.dirs.clone(),
+            Some(AuditLog::new(self.dirs.audit_path(), &audit_key)),
+        )));
 
         // Phase 11D: Contextual infrastructure tools (need AivyxDirs)
         #[cfg(feature = "infrastructure-tools")]
@@ -654,9 +650,20 @@ impl AgentSession {
             });
 
             crate::nexus_tools::register_nexus_tools(agent.tool_registry_mut(), nexus_ctx);
+
+            // Pass the data policy from config so the [NEXUS CONTEXT] block
+            // includes appropriate data-sharing guardrails.
+            let data_policy = self
+                .config
+                .nexus
+                .as_ref()
+                .map(|n| n.data_policy)
+                .unwrap_or_default();
+            agent.set_nexus_enabled(data_policy);
             tracing::info!(
-                "Nexus enabled for agent '{}' (7 social tools registered)",
+                "Nexus enabled for agent '{}' (7 social tools + community context, policy={:?})",
                 profile.name,
+                data_policy,
             );
         }
 

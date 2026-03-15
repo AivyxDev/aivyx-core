@@ -88,6 +88,23 @@ impl Tool for FederationChatTool {
             .as_str()
             .ok_or_else(|| AivyxError::Agent("federation_chat: missing 'message'".into()))?;
 
+        // Input length limits to prevent sending massive payloads to peers.
+        if peer.len() > 256 {
+            return Err(AivyxError::Agent(
+                "federation_chat: 'peer' exceeds 256 characters".into(),
+            ));
+        }
+        if agent.len() > 256 {
+            return Err(AivyxError::Agent(
+                "federation_chat: 'agent' exceeds 256 characters".into(),
+            ));
+        }
+        if message.len() > 32_768 {
+            return Err(AivyxError::Agent(
+                "federation_chat: 'message' exceeds 32KB limit".into(),
+            ));
+        }
+
         let req = RelayChatRequest {
             peer_id: peer.to_string(),
             agent: agent.to_string(),
@@ -177,6 +194,12 @@ impl Tool for FederationSearchTool {
         let query = input["query"]
             .as_str()
             .ok_or_else(|| AivyxError::Agent("federation_search: missing 'query'".into()))?;
+
+        if query.len() > 4_096 {
+            return Err(AivyxError::Agent(
+                "federation_search: 'query' exceeds 4KB limit".into(),
+            ));
+        }
 
         let peers: Vec<String> = input["peers"]
             .as_array()

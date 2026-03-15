@@ -181,6 +181,10 @@ impl Tool for ShellTool {
                 "command": {
                     "type": "string",
                     "description": "Shell command to execute"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Timeout in seconds (default: 120, max: 600)"
                 }
             },
             "required": ["command"]
@@ -198,11 +202,18 @@ impl Tool for ShellTool {
             .as_str()
             .ok_or_else(|| AivyxError::Agent("shell: missing 'command' parameter".into()))?;
 
-        let output = tokio::process::Command::new("sh")
+        let timeout_secs = input["timeout"].as_u64().unwrap_or(120).min(600); // Cap at 10 minutes
+
+        let fut = tokio::process::Command::new("sh")
             .arg("-c")
             .arg(command)
-            .output()
+            .output();
+
+        let output = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fut)
             .await
+            .map_err(|_| {
+                AivyxError::Agent(format!("shell: command timed out after {timeout_secs}s"))
+            })?
             .map_err(AivyxError::Io)?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();

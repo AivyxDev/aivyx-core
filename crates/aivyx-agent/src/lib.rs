@@ -37,7 +37,7 @@ pub mod vcs_tools;
 pub mod web_tools;
 
 pub use agent::Agent;
-pub use cost_tracker::CostTracker;
+pub use cost_tracker::{CostEntry, CostTracker};
 pub use digest::generate_digest;
 pub use persona::Persona;
 pub use profile::{AgentProfile, ProfileCapability};

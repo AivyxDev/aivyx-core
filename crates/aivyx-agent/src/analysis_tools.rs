@@ -575,6 +575,20 @@ impl Tool for MathEvalTool {
             .as_str()
             .ok_or_else(|| AivyxError::Agent("math_eval: missing 'expression' parameter".into()))?;
 
+        if expr.len() > 2_000 {
+            return Err(AivyxError::Agent(
+                "math_eval: expression exceeds 2000 character limit".into(),
+            ));
+        }
+
+        // Guard against stack exhaustion from deeply nested parentheses.
+        let max_depth = expr.bytes().filter(|&b| b == b'(').count();
+        if max_depth > 64 {
+            return Err(AivyxError::Agent(
+                "math_eval: expression exceeds maximum nesting depth (64)".into(),
+            ));
+        }
+
         let result = Self::eval_expression(expr)?;
 
         Ok(serde_json::json!({
@@ -2416,5 +2430,30 @@ mod tests {
                 tool.name()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn math_eval_rejects_deep_nesting() {
+        let tool = MathEvalTool::new();
+        // 100 nested parentheses — exceeds the depth limit of 64
+        let deep_expr = format!("{}1{}", "(".repeat(100), ")".repeat(100));
+        let result = tool
+            .execute(serde_json::json!({"expression": deep_expr}))
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("nesting depth"));
+    }
+
+    #[tokio::test]
+    async fn math_eval_rejects_long_expression() {
+        let tool = MathEvalTool::new();
+        let long_expr = "1+".repeat(1500);
+        let result = tool
+            .execute(serde_json::json!({"expression": long_expr}))
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("2000 character"));
     }
 }

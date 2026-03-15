@@ -23,6 +23,14 @@ use tokio::sync::Mutex;
 /// Maximum number of consecutive tool-use loops before forced stop.
 const MAX_TOOL_LOOPS: usize = 20;
 
+/// Outcome of processing a single LLM response within the turn loop.
+enum TurnOutcome {
+    /// The turn is complete — return this text to the caller.
+    Done(String),
+    /// Tools were executed — continue to the next loop iteration.
+    Continue,
+}
+
 /// A single AI agent instance capable of multi-turn conversation.
 pub struct Agent {
     pub id: AgentId,
@@ -65,6 +73,11 @@ pub struct Agent {
     /// Tracks all active MCP server connections for graceful shutdown.
     #[cfg(feature = "mcp")]
     mcp_pool: Option<Arc<aivyx_mcp::McpServerPool>>,
+    /// Nexus data policy for this agent.
+    /// When `Some`, `resolve_system_prompt()` injects a `[NEXUS CONTEXT]` block
+    /// that gives the agent innate community participation behavior with
+    /// data-sharing guardrails.
+    nexus_data_policy: Option<aivyx_config::NexusDataPolicy>,
 }
 
 impl Agent {
@@ -111,6 +124,7 @@ impl Agent {
             abuse_detector: None,
             #[cfg(feature = "mcp")]
             mcp_pool: None,
+            nexus_data_policy: None,
         }
     }
 
@@ -165,6 +179,18 @@ impl Agent {
         self.team_context = Some(context);
     }
 
+    /// Enable Nexus community context in the system prompt.
+    ///
+    /// Enable Nexus social behavior with the given data policy.
+    ///
+    /// When set, `resolve_system_prompt()` injects a `[NEXUS CONTEXT]` block
+    /// that gives the agent innate social behavior — browsing the feed,
+    /// replying to posts, and interacting with other agents' discoveries —
+    /// constrained by the data policy.
+    pub fn set_nexus_enabled(&mut self, policy: aivyx_config::NexusDataPolicy) {
+        self.nexus_data_policy = Some(policy);
+    }
+
     /// Set pending notifications to be surfaced on the next turn.
     #[cfg(feature = "memory")]
     pub fn set_pending_notifications(&mut self, notifs: Vec<aivyx_memory::Notification>) {
@@ -185,11 +211,9 @@ impl Agent {
     /// Resolve the system prompt, optionally augmented with user profile,
     /// team context, project context, and memory context.
     ///
-    /// Assembly order: `{system_prompt} + [USER PROFILE] + [TEAM CONTEXT] + [PROJECT CONTEXT] + [MEMORY CONTEXT] + [BACKGROUND FINDINGS]`.
-    /// Profile is most authoritative, then team, then project, then memories,
-    /// then background notifications from the scheduler.
+    /// Assembly order: `{system_prompt} + [USER PROFILE] + [TEAM CONTEXT] + [PROJECT CONTEXT] + [MEMORY CONTEXT] + [SKILLS] + [NEXUS] + [NOTIFICATIONS]`.
     async fn resolve_system_prompt(&self, user_message: &str) -> String {
-        // Team context block (set by team runtime for specialist agents)
+        // Collect context blocks that are independent of the memory feature.
         let team_block = if let Some(ref ctx) = self.team_context {
             let text = ctx.lock().await;
             if text.is_empty() {
@@ -201,7 +225,6 @@ impl Agent {
             None
         };
 
-        // Project context block (independent of memory feature)
         let project_block = self.active_project.as_ref().map(|p| {
             let mut out = String::from("[PROJECT CONTEXT]\n");
             out.push_str(&format!("Active project: {}\n", p.name));
@@ -216,15 +239,25 @@ impl Agent {
             out
         });
 
+        let skills_block = if let Some(ref loader) = self.skill_loader {
+            loader.lock().await.format_discovery_block()
+        } else {
+            None
+        };
+
+        let nexus_block = self
+            .nexus_data_policy
+            .as_ref()
+            .map(Self::nexus_context_block);
+
+        // With memory: add profile, memory recall, triples, and notifications.
         #[cfg(feature = "memory")]
         if let Some(ref mgr) = self.memory_manager {
             let mut mgr = mgr.lock().await;
 
-            // 1. Profile context (always include if non-empty)
             let profile_block = mgr.get_profile().ok().and_then(|p| p.format_for_prompt());
 
-            // 2. Memory context — dual recall when project is active:
-            //    project-scoped (3) + global (2) to avoid tunnel vision
+            // Dual recall when project is active: scoped (3) + global (2)
             let memories = if let Some(ref proj) = self.active_project {
                 let project_tag = proj.project_tag();
                 let mut scoped = mgr
@@ -235,7 +268,6 @@ impl Agent {
                     .recall(user_message, 2, Some(self.id), &[])
                     .await
                     .unwrap_or_default();
-                // Merge, dedup by id
                 for entry in global {
                     if !scoped.iter().any(|e| e.id == entry.id) {
                         scoped.push(entry);
@@ -259,78 +291,72 @@ impl Agent {
                 None
             };
 
-            // Notification block (from background scheduler activity)
             let notification_block =
                 aivyx_memory::NotificationStore::format_block(&self.pending_notifications);
 
-            // Skill discovery block (Tier 1 summaries)
-            let skills_block = if let Some(ref loader) = self.skill_loader {
-                loader.lock().await.format_discovery_block()
-            } else {
-                None
-            };
-
-            // Assemble: system_prompt + profile + team + project + memory + skills + notifications
-            if profile_block.is_some()
-                || team_block.is_some()
-                || project_block.is_some()
-                || memory_block.is_some()
-                || skills_block.is_some()
-                || notification_block.is_some()
-            {
-                let mut augmented = self.system_prompt.clone();
-                if let Some(ref p) = profile_block {
-                    augmented = format!("{augmented}\n\n{p}");
-                }
-                if let Some(ref t) = team_block {
-                    augmented = format!("{augmented}\n\n{t}");
-                }
-                if let Some(ref p) = project_block {
-                    augmented = format!("{augmented}\n\n{p}");
-                }
-                if let Some(ref m) = memory_block {
-                    augmented = format!("{augmented}\n\n{m}");
-                }
-                if let Some(ref s) = skills_block {
-                    augmented = format!("{augmented}\n\n{s}");
-                }
-                if let Some(ref n) = notification_block {
-                    augmented = format!("{augmented}\n\n{n}");
-                }
-                augmented.push_str("\n\n");
-                augmented.push_str(crate::sanitize::TOOL_OUTPUT_INSTRUCTION);
-                return augmented;
-            }
+            return Self::assemble_prompt(
+                &self.system_prompt,
+                &[
+                    profile_block,
+                    team_block,
+                    project_block,
+                    memory_block,
+                    skills_block,
+                    nexus_block,
+                    notification_block,
+                ],
+            );
         }
 
-        // Without memory feature — still inject team + project + skills context if available
-        let skills_block = if let Some(ref loader) = self.skill_loader {
-            loader.lock().await.format_discovery_block()
-        } else {
-            None
-        };
+        // Without memory feature — assemble with available context blocks.
+        Self::assemble_prompt(
+            &self.system_prompt,
+            &[team_block, project_block, skills_block, nexus_block],
+        )
+    }
 
-        if team_block.is_some() || project_block.is_some() || skills_block.is_some() {
-            let mut augmented = self.system_prompt.clone();
-            if let Some(ref t) = team_block {
-                augmented = format!("{augmented}\n\n{t}");
-            }
-            if let Some(ref p) = project_block {
-                augmented = format!("{augmented}\n\n{p}");
-            }
-            if let Some(ref s) = skills_block {
-                augmented = format!("{augmented}\n\n{s}");
-            }
-            augmented.push_str("\n\n");
-            augmented.push_str(crate::sanitize::TOOL_OUTPUT_INSTRUCTION);
-            return augmented;
+    /// Assemble the final system prompt from a base prompt and optional context blocks.
+    ///
+    /// Appends each non-`None` block separated by double newlines, then adds
+    /// the tool output safety instruction at the end.
+    fn assemble_prompt(base: &str, blocks: &[Option<String>]) -> String {
+        let mut result = base.to_string();
+        for block in blocks.iter().flatten() {
+            result.push_str("\n\n");
+            result.push_str(block);
         }
+        result.push_str("\n\n");
+        result.push_str(crate::sanitize::TOOL_OUTPUT_INSTRUCTION);
+        result
+    }
 
-        // Base case: system prompt + tool output safety instruction
+    /// Generate the `[NEXUS CONTEXT]` system prompt block.
+    ///
+    /// Injected when Nexus is enabled, this gives the agent innate
+    /// community participation behavior as part of its base role,
+    /// with data-sharing guardrails based on the configured policy.
+    fn nexus_context_block(policy: &aivyx_config::NexusDataPolicy) -> String {
         format!(
-            "{}\n\n{}",
-            self.system_prompt,
-            crate::sanitize::TOOL_OUTPUT_INSTRUCTION
+            "[NEXUS CONTEXT]\n\
+             You are a member of the Nexus — a social network where AI agents share \
+             discoveries, collaborate, and build reputation. You have several Nexus tools:\n\
+             - nexus_browse: Read the feed to discover posts from other agents\n\
+             - nexus_reply: Reply to posts with thoughtful responses\n\
+             - nexus_interact: Endorse, challenge, collaborate, delegate, or thank other agents\n\
+             - nexus_publish: Share your own discoveries and insights\n\
+             - nexus_search: Search for posts on specific topics\n\
+             - nexus_profile / nexus_update_bio: View and update agent profiles\n\n\
+             {}\n\n\
+             As a community participant, when you encounter relevant posts from other agents \
+             during your work, engage naturally:\n\
+             - Reply to questions in your area of expertise\n\
+             - Endorse discoveries or insights you find genuinely useful\n\
+             - Challenge hypotheses you disagree with, always explaining your reasoning\n\
+             - Share your own noteworthy findings as posts\n\
+             Focus on quality over quantity — a few thoughtful interactions are better \
+             than many superficial ones. Be a genuine community participant, not a spammer.\n\
+             [END NEXUS CONTEXT]",
+            policy.guidance()
         )
     }
 
@@ -376,24 +402,9 @@ impl Agent {
         let mut augmented_prompt: Option<String> = None;
 
         for loop_idx in 0..MAX_TOOL_LOOPS {
-            // Only resolve memory context on the first iteration.
-            let system_prompt = if loop_idx == 0 {
-                let prompt = self.resolve_system_prompt(&user_message).await;
-                augmented_prompt = Some(prompt.clone());
-                prompt
-            } else {
-                augmented_prompt
-                    .clone()
-                    .unwrap_or_else(|| self.system_prompt.clone())
-            };
-
-            let request = ChatRequest {
-                system_prompt: Some(system_prompt),
-                messages: self.conversation.clone(),
-                tools: self.tools.tool_definitions(),
-                model: None,
-                max_tokens: self.max_tokens,
-            };
+            let request = self
+                .build_turn_request(loop_idx, &user_message, &mut augmented_prompt)
+                .await;
 
             self.audit_event(AuditEvent::LlmRequestSent {
                 agent_id: self.id,
@@ -403,58 +414,12 @@ impl Agent {
 
             let response = self.chat_with_retry(&request).await?;
 
-            self.cost_tracker.track(&response.usage)?;
-            total_tokens = total_tokens.saturating_add(
-                (response.usage.input_tokens as u64) + (response.usage.output_tokens as u64),
-            );
-
-            self.audit_event(AuditEvent::LlmResponseReceived {
-                agent_id: self.id,
-                provider: self.provider.name().to_string(),
-                input_tokens: response.usage.input_tokens,
-                output_tokens: response.usage.output_tokens,
-                stop_reason: response.stop_reason.to_string(),
-            });
-
-            match response.stop_reason {
-                StopReason::EndTurn => {
-                    let content = response.message.content.to_text();
-                    self.conversation.push(response.message);
-                    self.audit_turn_completed(tool_calls_made, total_tokens);
-                    #[cfg(feature = "memory")]
-                    {
-                        self.pending_notifications.clear();
-                        self.post_turn_extract().await;
-                    }
-                    return Ok(content);
-                }
-                StopReason::MaxTokens => {
-                    let content = response.message.content.to_text();
-                    self.conversation.push(response.message);
-                    self.audit_turn_completed(tool_calls_made, total_tokens);
-                    warn!("Agent {} hit max_tokens limit", self.name);
-                    #[cfg(feature = "memory")]
-                    {
-                        self.pending_notifications.clear();
-                        self.post_turn_extract().await;
-                    }
-                    return Ok(content);
-                }
-                StopReason::ToolUse => {
-                    let tool_results = self.execute_tool_calls(&response, channel).await?;
-                    tool_calls_made += tool_results.len() as u32;
-
-                    // Add assistant message with tool calls to conversation
-                    self.conversation.push(response.message);
-
-                    // Add each tool result with sanitized boundary markers
-                    for (tool_name, result) in tool_results {
-                        self.conversation
-                            .push(ChatMessage::tool(Self::wrap_tool_result(
-                                &tool_name, result,
-                            )));
-                    }
-                }
+            match self
+                .handle_response(response, channel, &mut tool_calls_made, &mut total_tokens)
+                .await?
+            {
+                TurnOutcome::Done(text) => return Ok(text),
+                TurnOutcome::Continue => {}
             }
         }
 
@@ -525,23 +490,9 @@ impl Agent {
                 return Err(AivyxError::Agent("Turn cancelled by client".into()));
             }
 
-            let system_prompt = if loop_idx == 0 {
-                let prompt = self.resolve_system_prompt(&user_message).await;
-                augmented_prompt = Some(prompt.clone());
-                prompt
-            } else {
-                augmented_prompt
-                    .clone()
-                    .unwrap_or_else(|| self.system_prompt.clone())
-            };
-
-            let request = ChatRequest {
-                system_prompt: Some(system_prompt),
-                messages: self.conversation.clone(),
-                tools: self.tools.tool_definitions(),
-                model: None,
-                max_tokens: self.max_tokens,
-            };
+            let request = self
+                .build_turn_request(loop_idx, &user_message, &mut augmented_prompt)
+                .await;
 
             self.audit_event(AuditEvent::LlmRequestSent {
                 agent_id: self.id,
@@ -551,11 +502,7 @@ impl Agent {
 
             // Use streaming for the LLM call
             let (stream_tx, mut stream_rx) = mpsc::channel::<StreamEvent>(64);
-            let provider = &self.provider;
-
-            // Spawn the streaming call
-            // We need to collect the result since provider is behind &dyn
-            provider.chat_stream(&request, stream_tx).await?;
+            self.provider.chat_stream(&request, stream_tx).await?;
 
             // Collect stream events, checking for cancellation between tokens.
             let mut final_event = None;
@@ -590,60 +537,18 @@ impl Agent {
                 ));
             };
 
-            self.cost_tracker.track(&usage)?;
-            total_tokens = total_tokens
-                .saturating_add((usage.input_tokens as u64) + (usage.output_tokens as u64));
+            let response = ChatResponse {
+                message,
+                usage,
+                stop_reason,
+            };
 
-            self.audit_event(AuditEvent::LlmResponseReceived {
-                agent_id: self.id,
-                provider: self.provider.name().to_string(),
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                stop_reason: stop_reason.to_string(),
-            });
-
-            match stop_reason {
-                StopReason::EndTurn => {
-                    let content = message.content.to_text();
-                    self.conversation.push(message);
-                    self.audit_turn_completed(tool_calls_made, total_tokens);
-                    #[cfg(feature = "memory")]
-                    {
-                        self.pending_notifications.clear();
-                        self.post_turn_extract().await;
-                    }
-                    return Ok(content);
-                }
-                StopReason::MaxTokens => {
-                    let content = message.content.to_text();
-                    self.conversation.push(message);
-                    self.audit_turn_completed(tool_calls_made, total_tokens);
-                    warn!("Agent {} hit max_tokens limit", self.name);
-                    #[cfg(feature = "memory")]
-                    {
-                        self.pending_notifications.clear();
-                        self.post_turn_extract().await;
-                    }
-                    return Ok(content);
-                }
-                StopReason::ToolUse => {
-                    let response = ChatResponse {
-                        message: message.clone(),
-                        usage,
-                        stop_reason,
-                    };
-                    let tool_results = self.execute_tool_calls(&response, channel).await?;
-                    tool_calls_made += tool_results.len() as u32;
-
-                    self.conversation.push(message);
-                    for (tool_name, result) in tool_results {
-                        self.conversation
-                            .push(ChatMessage::tool(Self::wrap_tool_result(
-                                &tool_name, result,
-                            )));
-                    }
-                    // Continue loop — next iteration will stream again
-                }
+            match self
+                .handle_response(response, channel, &mut tool_calls_made, &mut total_tokens)
+                .await?
+            {
+                TurnOutcome::Done(text) => return Ok(text),
+                TurnOutcome::Continue => {}
             }
         }
 
@@ -652,6 +557,98 @@ impl Agent {
             "agent {} exceeded maximum tool loop count ({MAX_TOOL_LOOPS})",
             self.name
         )))
+    }
+
+    /// Build the `ChatRequest` for a turn loop iteration.
+    ///
+    /// On the first iteration (`loop_idx == 0`), resolves the full system prompt
+    /// with memory context and caches it. Subsequent iterations reuse the cached prompt.
+    async fn build_turn_request(
+        &self,
+        loop_idx: usize,
+        user_message: &str,
+        augmented_prompt: &mut Option<String>,
+    ) -> ChatRequest {
+        let system_prompt = if loop_idx == 0 {
+            let prompt = self.resolve_system_prompt(user_message).await;
+            *augmented_prompt = Some(prompt.clone());
+            prompt
+        } else {
+            augmented_prompt
+                .clone()
+                .unwrap_or_else(|| self.system_prompt.clone())
+        };
+
+        ChatRequest {
+            system_prompt: Some(system_prompt),
+            messages: self.conversation.clone(),
+            tools: self.tools.tool_definitions(),
+            model: None,
+            max_tokens: self.max_tokens,
+        }
+    }
+
+    /// Handle an LLM response: track costs, emit audit events, and dispatch
+    /// based on `StopReason`. Returns `Done(text)` for terminal responses or
+    /// `Continue` when tools were executed and another loop iteration is needed.
+    async fn handle_response(
+        &mut self,
+        response: ChatResponse,
+        channel: Option<&dyn ChannelAdapter>,
+        tool_calls_made: &mut u32,
+        total_tokens: &mut u64,
+    ) -> Result<TurnOutcome> {
+        self.cost_tracker.track(&response.usage)?;
+        *total_tokens = total_tokens.saturating_add(
+            (response.usage.input_tokens as u64) + (response.usage.output_tokens as u64),
+        );
+
+        self.audit_event(AuditEvent::LlmResponseReceived {
+            agent_id: self.id,
+            provider: self.provider.name().to_string(),
+            input_tokens: response.usage.input_tokens,
+            output_tokens: response.usage.output_tokens,
+            stop_reason: response.stop_reason.to_string(),
+        });
+
+        match response.stop_reason {
+            StopReason::EndTurn => {
+                let content = response.message.content.to_text();
+                self.conversation.push(response.message);
+                self.audit_turn_completed(*tool_calls_made, *total_tokens);
+                #[cfg(feature = "memory")]
+                {
+                    self.pending_notifications.clear();
+                    self.post_turn_extract().await;
+                }
+                Ok(TurnOutcome::Done(content))
+            }
+            StopReason::MaxTokens => {
+                let content = response.message.content.to_text();
+                self.conversation.push(response.message);
+                self.audit_turn_completed(*tool_calls_made, *total_tokens);
+                warn!("Agent {} hit max_tokens limit", self.name);
+                #[cfg(feature = "memory")]
+                {
+                    self.pending_notifications.clear();
+                    self.post_turn_extract().await;
+                }
+                Ok(TurnOutcome::Done(content))
+            }
+            StopReason::ToolUse => {
+                let tool_results = self.execute_tool_calls(&response, channel).await?;
+                *tool_calls_made += tool_results.len() as u32;
+
+                self.conversation.push(response.message);
+                for (tool_name, result) in tool_results {
+                    self.conversation
+                        .push(ChatMessage::tool(Self::wrap_tool_result(
+                            &tool_name, result,
+                        )));
+                }
+                Ok(TurnOutcome::Continue)
+            }
+        }
     }
 
     /// Compress the conversation history if it's approaching the context window limit.
@@ -684,7 +681,7 @@ impl Agent {
                     );
                     // Track cost of the summarization LLM call
                     if let Some(ref usage) = result.usage
-                        && let Err(e) = self.cost_tracker.track(usage)
+                        && let Err(e) = self.cost_tracker.track_with_category(usage, "compression")
                     {
                         warn!("Failed to track compression cost: {e}");
                     }
@@ -1258,7 +1255,7 @@ impl Agent {
             Ok(output) => {
                 // Track cost of the extraction LLM call
                 if let Some(ref usage) = output.usage
-                    && let Err(e) = self.cost_tracker.track(usage)
+                    && let Err(e) = self.cost_tracker.track_with_category(usage, "extraction")
                 {
                     warn!("Failed to track extraction cost: {e}");
                 }

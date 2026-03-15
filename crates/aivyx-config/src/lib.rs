@@ -36,7 +36,7 @@ pub use embedding::EmbeddingConfig;
 pub use heartbeat::HeartbeatConfig;
 pub use mcp::{McpAuthConfig, McpAuthMethod, McpServerConfig, McpTransport};
 pub use memory::MemoryConfig;
-pub use nexus::NexusConfig;
+pub use nexus::{NexusConfig, NexusDataPolicy};
 pub use otel::OtelConfig;
 pub use plugin::{PluginEntry, PluginSource};
 pub use project::ProjectConfig;

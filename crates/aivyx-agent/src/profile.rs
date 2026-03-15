@@ -196,164 +196,154 @@ impl AgentProfile {
         }
     }
 
-    fn assistant_profile(name: &str) -> Self {
-        let persona = Persona::for_role("assistant").unwrap_or_default();
+    /// Create a role profile with the given tools, skills, and optional overrides.
+    ///
+    /// Shared helper that eliminates boilerplate across role-specific constructors.
+    /// All fields not specified use sensible defaults: empty soul (persona generates it),
+    /// 8192 max tokens, default capabilities, and nexus enabled.
+    fn role_profile(
+        name: &str,
+        role: &str,
+        tool_ids: Vec<&str>,
+        skills: Vec<&str>,
+        autonomy_tier: Option<AutonomyTier>,
+        capabilities: Option<Vec<ProfileCapability>>,
+    ) -> Self {
         Self {
             name: name.to_string(),
-            role: "assistant".to_string(),
+            role: role.to_string(),
             soul: String::new(),
-            tool_ids: vec![
-                "file_read".into(),
-                "file_write".into(),
-                "shell".into(),
-                "web_search".into(),
-                "http_fetch".into(),
-                "project_tree".into(),
-                "project_outline".into(),
-                "file_delete".into(),
-                "file_move".into(),
-                "file_copy".into(),
-                "directory_list".into(),
-                "grep_search".into(),
-                "glob_find".into(),
-                "text_diff".into(),
-                "git_status".into(),
-                "git_diff".into(),
-                "git_log".into(),
-                "git_commit".into(),
-                "system_time".into(),
-                "json_parse".into(),
-            ],
-            skills: vec![
-                "task management".into(),
-                "summarization".into(),
-                "scheduling".into(),
-                "research".into(),
-            ],
-            autonomy_tier: None,
+            tool_ids: tool_ids.into_iter().map(String::from).collect(),
+            skills: skills.into_iter().map(String::from).collect(),
+            autonomy_tier,
             provider: None,
             fallback_providers: Vec::new(),
             cache: None,
             routing: None,
             max_tokens: 8192,
-            capabilities: default_capabilities(),
+            capabilities: capabilities.unwrap_or_else(default_capabilities),
             mcp_servers: Vec::new(),
-            persona: Some(persona),
+            persona: Persona::for_role(role),
             nexus_enabled: true,
         }
+    }
+
+    fn assistant_profile(name: &str) -> Self {
+        Self::role_profile(
+            name,
+            "assistant",
+            vec![
+                "file_read",
+                "file_write",
+                "shell",
+                "web_search",
+                "http_fetch",
+                "project_tree",
+                "project_outline",
+                "file_delete",
+                "file_move",
+                "file_copy",
+                "directory_list",
+                "grep_search",
+                "glob_find",
+                "text_diff",
+                "git_status",
+                "git_diff",
+                "git_log",
+                "git_commit",
+                "system_time",
+                "json_parse",
+            ],
+            vec!["task management", "summarization", "scheduling", "research"],
+            None,
+            None,
+        )
     }
 
     fn coder_profile(name: &str) -> Self {
-        let persona = Persona::for_role("coder").unwrap_or_default();
-        Self {
-            name: name.to_string(),
-            role: "coder".to_string(),
-            soul: String::new(),
-            tool_ids: vec![
-                "file_read".into(),
-                "file_write".into(),
-                "shell".into(),
-                "project_tree".into(),
-                "project_outline".into(),
-                "file_delete".into(),
-                "file_move".into(),
-                "file_copy".into(),
-                "directory_list".into(),
-                "grep_search".into(),
-                "glob_find".into(),
-                "text_diff".into(),
-                "git_status".into(),
-                "git_diff".into(),
-                "git_log".into(),
-                "git_commit".into(),
-                "system_time".into(),
-                "json_parse".into(),
+        Self::role_profile(
+            name,
+            "coder",
+            vec![
+                "file_read",
+                "file_write",
+                "shell",
+                "project_tree",
+                "project_outline",
+                "file_delete",
+                "file_move",
+                "file_copy",
+                "directory_list",
+                "grep_search",
+                "glob_find",
+                "text_diff",
+                "git_status",
+                "git_diff",
+                "git_log",
+                "git_commit",
+                "system_time",
+                "json_parse",
             ],
-            skills: vec![
-                "code review".into(),
-                "debugging".into(),
-                "architecture".into(),
-                "testing".into(),
-                "refactoring".into(),
+            vec![
+                "code review",
+                "debugging",
+                "architecture",
+                "testing",
+                "refactoring",
             ],
-            autonomy_tier: None,
-            provider: None,
-            fallback_providers: Vec::new(),
-            cache: None,
-            routing: None,
-            max_tokens: 8192,
-            capabilities: default_capabilities(),
-            mcp_servers: Vec::new(),
-            persona: Some(persona),
-            nexus_enabled: true,
-        }
+            None,
+            None,
+        )
     }
 
     fn researcher_profile(name: &str) -> Self {
-        let persona = Persona::for_role("researcher").unwrap_or_default();
-        Self {
-            name: name.to_string(),
-            role: "researcher".to_string(),
-            soul: String::new(),
-            tool_ids: vec![
-                "file_read".into(),
-                "file_write".into(),
-                "shell".into(),
-                "web_search".into(),
-                "http_fetch".into(),
-                "project_tree".into(),
-                "project_outline".into(),
-                "directory_list".into(),
-                "grep_search".into(),
-                "glob_find".into(),
-                "system_time".into(),
-                "json_parse".into(),
+        Self::role_profile(
+            name,
+            "researcher",
+            vec![
+                "file_read",
+                "file_write",
+                "shell",
+                "web_search",
+                "http_fetch",
+                "project_tree",
+                "project_outline",
+                "directory_list",
+                "grep_search",
+                "glob_find",
+                "system_time",
+                "json_parse",
             ],
-            skills: vec![
-                "information synthesis".into(),
-                "literature review".into(),
-                "data analysis".into(),
-                "summarization".into(),
+            vec![
+                "information synthesis",
+                "literature review",
+                "data analysis",
+                "summarization",
             ],
-            autonomy_tier: None,
-            provider: None,
-            fallback_providers: Vec::new(),
-            cache: None,
-            routing: None,
-            max_tokens: 8192,
-            capabilities: default_capabilities(),
-            mcp_servers: Vec::new(),
-            persona: Some(persona),
-            nexus_enabled: true,
-        }
+            None,
+            None,
+        )
     }
 
     fn writer_profile(name: &str) -> Self {
-        let persona = Persona::for_role("writer").unwrap_or_default();
-        Self {
-            name: name.to_string(),
-            role: "writer".to_string(),
-            soul: String::new(),
-            tool_ids: vec![
-                "file_read".into(),
-                "file_write".into(),
-                "directory_list".into(),
-                "glob_find".into(),
-                "text_diff".into(),
+        Self::role_profile(
+            name,
+            "writer",
+            vec![
+                "file_read",
+                "file_write",
+                "directory_list",
+                "glob_find",
+                "text_diff",
             ],
-            skills: vec![
-                "technical writing".into(),
-                "editing".into(),
-                "documentation".into(),
-                "copywriting".into(),
+            vec![
+                "technical writing",
+                "editing",
+                "documentation",
+                "copywriting",
             ],
-            autonomy_tier: None,
-            provider: None,
-            fallback_providers: Vec::new(),
-            cache: None,
-            routing: None,
-            max_tokens: 8192,
-            capabilities: vec![
+            None,
+            Some(vec![
                 ProfileCapability {
                     scope: CapabilityScope::Filesystem {
                         root: std::path::PathBuf::from("/"),
@@ -364,54 +354,41 @@ impl AgentProfile {
                     scope: CapabilityScope::Custom("memory".to_string()),
                     pattern: "*".to_string(),
                 },
-            ],
-            mcp_servers: Vec::new(),
-            persona: Some(persona),
-            nexus_enabled: true,
-        }
+            ]),
+        )
     }
 
     fn ops_profile(name: &str) -> Self {
-        let persona = Persona::for_role("ops").unwrap_or_default();
-        Self {
-            name: name.to_string(),
-            role: "ops".to_string(),
-            soul: String::new(),
-            tool_ids: vec![
-                "file_read".into(),
-                "file_write".into(),
-                "shell".into(),
-                "file_delete".into(),
-                "file_move".into(),
-                "file_copy".into(),
-                "directory_list".into(),
-                "grep_search".into(),
-                "glob_find".into(),
-                "git_status".into(),
-                "git_diff".into(),
-                "git_log".into(),
-                "system_time".into(),
-                "env_read".into(),
-                "hash_compute".into(),
+        Self::role_profile(
+            name,
+            "ops",
+            vec![
+                "file_read",
+                "file_write",
+                "shell",
+                "file_delete",
+                "file_move",
+                "file_copy",
+                "directory_list",
+                "grep_search",
+                "glob_find",
+                "git_status",
+                "git_diff",
+                "git_log",
+                "system_time",
+                "env_read",
+                "hash_compute",
             ],
-            skills: vec![
-                "system administration".into(),
-                "Docker".into(),
-                "CI/CD".into(),
-                "monitoring".into(),
-                "troubleshooting".into(),
+            vec![
+                "system administration",
+                "Docker",
+                "CI/CD",
+                "monitoring",
+                "troubleshooting",
             ],
-            autonomy_tier: Some(AutonomyTier::Leash),
-            provider: None,
-            fallback_providers: Vec::new(),
-            cache: None,
-            routing: None,
-            max_tokens: 8192,
-            capabilities: default_capabilities(),
-            mcp_servers: Vec::new(),
-            persona: Some(persona),
-            nexus_enabled: true,
-        }
+            Some(AutonomyTier::Leash),
+            None,
+        )
     }
 }
 

@@ -369,8 +369,8 @@ impl Tool for TextDiffTool {
             .map_err(AivyxError::Io)?;
 
         // Guard against O(n*m) memory exhaustion in the LCS algorithm.
-        // 10 000 lines per file ≈ 100M table entries (800 MB) at the limit.
-        const MAX_DIFF_LINES: usize = 10_000;
+        // 2 000 lines per file ≈ 4M table entries (32 MB) at the limit.
+        const MAX_DIFF_LINES: usize = 2_000;
         let lines_a = content_a.lines().count();
         let lines_b = content_b.lines().count();
         if lines_a > MAX_DIFF_LINES || lines_b > MAX_DIFF_LINES {

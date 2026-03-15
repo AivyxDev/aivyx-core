@@ -401,6 +401,11 @@ impl Tool for NexusInteractTool {
         let interaction_id = interaction.id;
         self.ctx.store.save_interaction(&interaction)?;
 
+        // Auto-relay to Nexus hub (fire-and-forget)
+        if let Some(ref relay) = self.ctx.relay {
+            relay.relay_interaction(&interaction);
+        }
+
         Ok(serde_json::json!({
             "status": "recorded",
             "interaction_id": interaction_id.to_string(),
@@ -828,7 +833,8 @@ impl Tool for NexusUpdateBioTool {
                 }));
             }
             profile.bio = if bio.len() > 500 {
-                format!("{}...", &bio[..497])
+                let boundary = bio.floor_char_boundary(497);
+                format!("{}...", &bio[..boundary])
             } else {
                 bio.to_string()
             };

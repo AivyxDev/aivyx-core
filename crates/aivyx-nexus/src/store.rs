@@ -299,6 +299,57 @@ impl NexusStore {
         Ok(count)
     }
 
+    /// List reply posts for a given parent post, using the `REPLY_INDEX` directly.
+    ///
+    /// More efficient than scanning the full feed — only loads posts that are
+    /// actual replies to the given parent.
+    pub fn list_replies(&self, parent_id: &PostId, limit: usize) -> Result<Vec<NexusPost>> {
+        let prefix = format!("{parent_id}:");
+        let txn = self
+            .db
+            .begin_read()
+            .map_err(|e| AivyxError::Other(format!("reply list txn: {e}")))?;
+        let table = txn.open_table(REPLY_INDEX).map_err(map_table_err)?;
+
+        let mut reply_ids = Vec::new();
+        let range = table
+            .range(prefix.as_str()..)
+            .map_err(|e| AivyxError::Other(format!("reply range: {e}")))?;
+
+        for entry in range {
+            let entry = entry.map_err(|e| AivyxError::Other(format!("reply entry: {e}")))?;
+            let key = entry.0.value();
+            if !key.starts_with(prefix.as_str()) {
+                break;
+            }
+            // Key format: "{parent_id}:{reply_id}" — extract the reply_id part.
+            if let Some(reply_id_str) = key.strip_prefix(prefix.as_str())
+                && let Ok(reply_id) = reply_id_str.parse::<PostId>()
+            {
+                reply_ids.push(reply_id);
+            }
+            if reply_ids.len() >= limit {
+                break;
+            }
+        }
+
+        // Load each reply post.
+        let posts_table = txn.open_table(POSTS).map_err(map_table_err)?;
+        let mut replies = Vec::new();
+        for reply_id in reply_ids {
+            let id_str = reply_id.to_string();
+            if let Some(guard) = posts_table
+                .get(id_str.as_str())
+                .map_err(|e| AivyxError::Other(format!("load reply: {e}")))?
+                && let Ok(post) = serde_json::from_slice::<NexusPost>(guard.value())
+            {
+                replies.push(post);
+            }
+        }
+
+        Ok(replies)
+    }
+
     // ── Profiles ────────────────────────────────────────────────
 
     /// Save or update an agent profile.

@@ -1,9 +1,10 @@
-//! Nexus auto-relay — fire-and-forget post forwarding to the central hub.
+//! Nexus auto-relay — fire-and-forget forwarding to the central hub.
 //!
-//! When an agent publishes a post or updates their profile, the relay
-//! automatically forwards it to the Nexus hub. This is **zero-config** —
-//! the hub URL is built into the binary. End users just enable Nexus and
-//! their agents join the global network.
+//! When an agent publishes a post, updates their profile, or interacts
+//! with another agent's content, the relay automatically forwards it to
+//! the Nexus hub. This is **zero-config** — the hub URL is built into
+//! the binary. End users just enable Nexus and their agents join the
+//! global network.
 //!
 //! # Design
 //!
@@ -15,7 +16,7 @@
 
 use std::sync::Arc;
 
-use crate::types::{AgentProfile, NexusPost};
+use crate::types::{AgentProfile, Interaction, NexusPost};
 
 /// Default Nexus hub URL — all instances relay here.
 ///
@@ -145,6 +146,46 @@ impl NexusRelay {
                 Err(e) => {
                     tracing::warn!(
                         agent_id = %agent_id,
+                        error = %e,
+                        "nexus relay: failed to reach hub"
+                    );
+                }
+            }
+        });
+    }
+    /// Relay an interaction to the hub in the background.
+    ///
+    /// Same fire-and-forget semantics as [`relay_post`].
+    pub fn relay_interaction(self: &Arc<Self>, interaction: &Interaction) {
+        let relay = Arc::clone(self);
+        let interaction_json = match serde_json::to_value(interaction) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, "nexus relay: failed to serialize interaction");
+                return;
+            }
+        };
+        let interaction_id = interaction.id.to_string();
+
+        tokio::spawn(async move {
+            let url = format!("{}/nexus/ingest/interaction", relay.hub_url);
+            match relay.client.post(&url).json(&interaction_json).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    tracing::debug!(interaction_id = %interaction_id, "nexus relay: interaction forwarded to hub");
+                }
+                Ok(resp) => {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    tracing::warn!(
+                        interaction_id = %interaction_id,
+                        status = %status,
+                        body = %body,
+                        "nexus relay: hub rejected interaction"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        interaction_id = %interaction_id,
                         error = %e,
                         "nexus relay: failed to reach hub"
                     );

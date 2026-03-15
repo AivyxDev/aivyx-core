@@ -340,6 +340,184 @@ fn apply_field_change(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// SkillCreateTool — self-learning loop
+// ---------------------------------------------------------------------------
+
+/// Tool that lets an agent create a new skill from a discovered pattern.
+///
+/// The agent provides a name, description, and step-by-step instructions.
+/// The tool scaffolds a `SKILL.md` manifest in `~/.aivyx/skills/{name}/SKILL.md`.
+/// This closes the self-learning loop: agents can mine patterns from experience
+/// and crystallize them into reusable skills.
+pub struct SkillCreateTool {
+    id: ToolId,
+    dirs: AivyxDirs,
+    agent_name: String,
+    audit_log: Option<AuditLog>,
+}
+
+impl SkillCreateTool {
+    /// Create a new skill creation tool.
+    pub fn new(dirs: AivyxDirs, agent_name: String, audit_log: Option<AuditLog>) -> Self {
+        Self {
+            id: ToolId::new(),
+            dirs,
+            agent_name,
+            audit_log,
+        }
+    }
+
+    fn audit(&self, event: AuditEvent) {
+        if let Some(log) = &self.audit_log
+            && let Err(e) = log.append(event)
+        {
+            warn!("Failed to write audit event: {e}");
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for SkillCreateTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "skill_create"
+    }
+
+    fn description(&self) -> &str {
+        "Create a new reusable skill from a pattern you've discovered. Provide a name, \
+         description, and step-by-step instructions. The skill is saved as a SKILL.md \
+         manifest that can be activated in future sessions."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Slug-style skill name (e.g., 'deploy-to-staging', 'analyze-logs'). Must be unique."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "One-line summary of what this skill does."
+                },
+                "instructions": {
+                    "type": "string",
+                    "description": "Step-by-step instructions for executing this skill. Use markdown formatting."
+                },
+                "tools": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional list of tool names this skill uses (e.g., ['shell_run', 'file_write'])."
+                }
+            },
+            "required": ["name", "description", "instructions"]
+        })
+    }
+
+    fn required_scope(&self) -> Option<CapabilityScope> {
+        Some(CapabilityScope::Custom("self-improvement".into()))
+    }
+
+    async fn execute(&self, input: serde_json::Value) -> Result<serde_json::Value> {
+        let name = input["name"]
+            .as_str()
+            .ok_or_else(|| AivyxError::Agent("skill_create: missing 'name'".into()))?
+            .trim();
+        let description = input["description"]
+            .as_str()
+            .ok_or_else(|| AivyxError::Agent("skill_create: missing 'description'".into()))?
+            .trim();
+        let instructions = input["instructions"]
+            .as_str()
+            .ok_or_else(|| AivyxError::Agent("skill_create: missing 'instructions'".into()))?
+            .trim();
+
+        // Validate name is slug-style
+        if name.is_empty() || name.len() > 64 {
+            return Err(AivyxError::Agent(
+                "skill_create: name must be 1-64 characters".into(),
+            ));
+        }
+        if !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(AivyxError::Agent(
+                "skill_create: name must be slug-style (alphanumeric, hyphens, underscores)".into(),
+            ));
+        }
+
+        // Validate size limits
+        if description.len() > 500 {
+            return Err(AivyxError::Agent(
+                "skill_create: description must be ≤500 characters".into(),
+            ));
+        }
+        if instructions.len() > 10_000 {
+            return Err(AivyxError::Agent(
+                "skill_create: instructions must be ≤10,000 characters".into(),
+            ));
+        }
+
+        // Build skill directory
+        let skill_dir = self.dirs.skills_dir().join(name);
+        if skill_dir.exists() {
+            return Err(AivyxError::Agent(format!(
+                "skill_create: skill '{name}' already exists at {}",
+                skill_dir.display()
+            )));
+        }
+
+        std::fs::create_dir_all(&skill_dir)?;
+
+        // Format optional tools list
+        let tools_section = if let Some(tools) = input["tools"].as_array() {
+            let tool_names: Vec<&str> = tools.iter().filter_map(|v| v.as_str()).collect();
+            if tool_names.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n\n## Required Tools\n\n{}",
+                    tool_names
+                        .iter()
+                        .map(|t| format!("- `{t}`"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
+            }
+        } else {
+            String::new()
+        };
+
+        // Write SKILL.md
+        let manifest = format!(
+            "---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n\n{description}\n\n## Instructions\n\n{instructions}{tools_section}\n\n---\n*Auto-created by agent `{agent}` via self-learning.*\n",
+            agent = self.agent_name,
+        );
+
+        let manifest_path = skill_dir.join("SKILL.md");
+        std::fs::write(&manifest_path, &manifest)?;
+
+        self.audit(AuditEvent::SkillCreated {
+            agent_name: self.agent_name.clone(),
+            skill_name: name.to_string(),
+        });
+
+        Ok(serde_json::json!({
+            "status": "created",
+            "skill_name": name,
+            "path": manifest_path.display().to_string(),
+            "agent": self.agent_name,
+            "hint": "The skill is now available. It will be discovered on the next session via skill_activate."
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

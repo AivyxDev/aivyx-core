@@ -3,11 +3,24 @@ use std::collections::HashMap;
 use aivyx_core::{AivyxError, Result};
 use aivyx_llm::TokenUsage;
 
+/// Per-category cost breakdown entry.
+#[derive(Debug, Clone, Default)]
+pub struct CostEntry {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost_usd: f64,
+    pub call_count: u64,
+}
+
 /// Tracks estimated cost from LLM token usage across a session.
 ///
 /// Enforces a configurable per-session spending cap. The `metadata` map
 /// can carry observer-populated tags (e.g., complexity level from routing)
 /// that the engine-side cost ledger reads when recording entries.
+///
+/// Per-category breakdowns (`by_category`) attribute costs to logical
+/// operations like "turn", "compression", "extraction", or specific tool
+/// names — enabling granular cost analysis.
 pub struct CostTracker {
     max_cost_usd: f64,
     accumulated_cost_usd: f64,
@@ -17,6 +30,8 @@ pub struct CostTracker {
     output_cost_per_token: f64,
     /// Metadata populated by observers (e.g., routing complexity level).
     pub metadata: HashMap<String, String>,
+    /// Per-category cost breakdown (e.g., "turn", "compression", "extraction", tool names).
+    by_category: HashMap<String, CostEntry>,
 }
 
 impl CostTracker {
@@ -29,11 +44,21 @@ impl CostTracker {
             input_cost_per_token,
             output_cost_per_token,
             metadata: HashMap::new(),
+            by_category: HashMap::new(),
         }
     }
 
     /// Record token usage and check if the session cost cap is exceeded.
     pub fn track(&mut self, usage: &TokenUsage) -> Result<()> {
+        self.track_with_category(usage, "turn")
+    }
+
+    /// Record token usage attributed to a named category.
+    ///
+    /// Categories are free-form strings like `"turn"`, `"compression"`,
+    /// `"extraction"`, or tool names. The per-category breakdown can be
+    /// queried via [`cost_by_category()`](Self::cost_by_category).
+    pub fn track_with_category(&mut self, usage: &TokenUsage, category: &str) -> Result<()> {
         let cost = (usage.input_tokens as f64 * self.input_cost_per_token)
             + (usage.output_tokens as f64 * self.output_cost_per_token);
 
@@ -41,8 +66,12 @@ impl CostTracker {
         self.total_input_tokens += usage.input_tokens as u64;
         self.total_output_tokens += usage.output_tokens as u64;
 
-        // max_cost_usd == 0.0 means "unlimited" (no cap enforcement).
-        // This is the natural default for local providers like Ollama.
+        let entry = self.by_category.entry(category.to_string()).or_default();
+        entry.input_tokens += usage.input_tokens as u64;
+        entry.output_tokens += usage.output_tokens as u64;
+        entry.cost_usd += cost;
+        entry.call_count += 1;
+
         if self.max_cost_usd > 0.0 && self.accumulated_cost_usd > self.max_cost_usd {
             return Err(AivyxError::Agent(format!(
                 "session cost cap exceeded: ${:.4} > ${:.2}",
@@ -66,6 +95,11 @@ impl CostTracker {
     /// Total output tokens used this session.
     pub fn total_output_tokens(&self) -> u64 {
         self.total_output_tokens
+    }
+
+    /// Per-category cost breakdown.
+    pub fn cost_by_category(&self) -> &HashMap<String, CostEntry> {
+        &self.by_category
     }
 }
 

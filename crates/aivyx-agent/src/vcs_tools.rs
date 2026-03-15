@@ -187,7 +187,7 @@ impl Tool for GitDiffTool {
             cmd.arg("--staged");
         }
         if let Some(f) = file {
-            cmd.arg(f);
+            cmd.arg("--").arg(f);
         }
 
         let output = cmd.output().await.map_err(AivyxError::Io)?;
@@ -208,7 +208,7 @@ impl Tool for GitDiffTool {
             stat_cmd.arg("--staged");
         }
         if let Some(f) = file {
-            stat_cmd.arg(f);
+            stat_cmd.arg("--").arg(f);
         }
 
         let stat_output = stat_cmd.output().await.map_err(AivyxError::Io)?;
@@ -474,7 +474,7 @@ impl Tool for GitCommitTool {
         if let Some(path) = repo_path {
             add_cmd.arg("-C").arg(path);
         }
-        add_cmd.arg("add");
+        add_cmd.arg("add").arg("--");
         for f in &file_paths {
             add_cmd.arg(f);
         }

@@ -470,6 +470,13 @@ pub enum AuditEvent {
         /// Filesystem path to the skill directory.
         source_path: String,
     },
+    /// A new skill was created autonomously by an agent (self-learning).
+    SkillCreated {
+        /// Name of the agent that created the skill.
+        agent_name: String,
+        /// Name of the new skill.
+        skill_name: String,
+    },
     /// An endpoint rate limit was exceeded.
     RateLimitExceeded {
         /// Client IP address.

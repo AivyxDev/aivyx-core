@@ -86,14 +86,24 @@ impl EnvReadTool {
 }
 
 /// Sensitive environment variable name patterns to filter out.
+///
+/// Patterns are matched as substrings of the uppercased variable name.
+/// `PASS` is intentionally excluded to avoid blocking `$PATH` — use
+/// `PASSWORD` and `PASSWD` instead.
 const SENSITIVE_ENV_PATTERNS: &[&str] = &[
     "PASSWORD",
+    "PASSWD",
     "TOKEN",
     "SECRET",
     "KEY",
     "CREDENTIAL",
     "API_KEY",
+    "APIKEY",
     "PASSPHRASE",
+    "AUTH",
+    "PRIVATE",
+    "SIGNING",
+    "CERTIFICATE",
 ];
 
 /// Check whether an environment variable name matches a sensitive pattern.
@@ -335,7 +345,13 @@ impl Tool for HashComputeTool {
         let mode = input["mode"].as_str().unwrap_or("text");
 
         let data: Vec<u8> = match mode {
-            "file" => tokio::fs::read(raw_input).await.map_err(AivyxError::Io)?,
+            "file" => {
+                // Validate path against dangerous system directories.
+                let validated =
+                    crate::built_in_tools::resolve_and_validate_path(raw_input, "hash_compute")
+                        .await?;
+                tokio::fs::read(&validated).await.map_err(AivyxError::Io)?
+            }
             "text" => raw_input.as_bytes().to_vec(),
             other => {
                 return Err(AivyxError::Agent(format!(
@@ -559,5 +575,50 @@ mod tests {
         assert!(utc.contains('T'));
         let ts = result["unix_timestamp"].as_i64().unwrap();
         assert!(ts > 1_700_000_000);
+    }
+
+    #[tokio::test]
+    async fn hash_compute_file_rejects_dangerous_path() {
+        let tool = HashComputeTool::new();
+        // `/etc` is in the dangerous paths list (exact match)
+        let result = tool
+            .execute(serde_json::json!({
+                "input": "/etc",
+                "mode": "file",
+            }))
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("dangerous path"));
+    }
+
+    #[tokio::test]
+    async fn hash_compute_file_validates_path() {
+        let tool = HashComputeTool::new();
+        // Nonexistent file should produce a validation error, not a raw IO error
+        let result = tool
+            .execute(serde_json::json!({
+                "input": "/tmp/aivyx-nonexistent-hash-xyz",
+                "mode": "file",
+            }))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn expanded_sensitive_env_patterns() {
+        assert!(is_sensitive_env("DATABASE_PASSWORD"));
+        assert!(is_sensitive_env("GITHUB_TOKEN"));
+        assert!(is_sensitive_env("AWS_SECRET_ACCESS_KEY"));
+        assert!(is_sensitive_env("OAUTH_APIKEY"));
+        assert!(is_sensitive_env("AUTH_HEADER"));
+        assert!(is_sensitive_env("SIGNING_KEY"));
+        assert!(is_sensitive_env("TLS_CERTIFICATE"));
+        assert!(is_sensitive_env("DB_PASSWD"));
+        // Should NOT block these
+        assert!(!is_sensitive_env("HOME"));
+        assert!(!is_sensitive_env("PATH"));
+        assert!(!is_sensitive_env("LANG"));
+        assert!(!is_sensitive_env("SHELL"));
     }
 }

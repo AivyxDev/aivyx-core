@@ -90,7 +90,8 @@ impl Tool for ProjectTreeTool {
             .ok_or_else(|| AivyxError::Agent("project_tree: missing 'path' parameter".into()))?;
         let max_depth = input["max_depth"].as_u64().unwrap_or(3) as usize;
 
-        let root = std::path::Path::new(path);
+        // Validate path against dangerous system directories.
+        let root = crate::built_in_tools::resolve_and_validate_path(path, "project_tree").await?;
         if !root.is_dir() {
             return Err(AivyxError::Agent(format!(
                 "project_tree: '{path}' is not a directory"
@@ -99,7 +100,7 @@ impl Tool for ProjectTreeTool {
 
         let mut output = String::new();
         let mut entry_count = 0;
-        walk_tree(root, max_depth, 0, &mut output, &mut entry_count)?;
+        walk_tree(&root, max_depth, 0, &mut output, &mut entry_count)?;
 
         // Truncate if needed.
         if output.len() > MAX_TREE_CHARS {
@@ -321,7 +322,11 @@ impl Tool for ProjectOutlineTool {
             .as_str()
             .ok_or_else(|| AivyxError::Agent("project_outline: missing 'path' parameter".into()))?;
 
-        let content = tokio::fs::read_to_string(path)
+        // Validate path against dangerous system directories.
+        let validated_path =
+            crate::built_in_tools::resolve_and_validate_path(path, "project_outline").await?;
+
+        let content = tokio::fs::read_to_string(&validated_path)
             .await
             .map_err(AivyxError::Io)?;
 
@@ -916,5 +921,25 @@ pub fn real_function() {
         assert!(result["files"].as_array().unwrap().is_empty());
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn project_tree_rejects_dangerous_root_path() {
+        let tool = ProjectTreeTool::new();
+        let result = tool.execute(serde_json::json!({ "path": "/" })).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("dangerous path"));
+    }
+
+    #[tokio::test]
+    async fn project_outline_validates_path() {
+        // Ensure the path goes through resolve_and_validate_path (not a raw read).
+        // A nonexistent file should produce a tool-prefixed error, not a raw IO error.
+        let tool = ProjectOutlineTool::new();
+        let result = tool
+            .execute(serde_json::json!({ "path": "/tmp/aivyx-nonexistent-file-xyz.rs" }))
+            .await;
+        assert!(result.is_err());
     }
 }
