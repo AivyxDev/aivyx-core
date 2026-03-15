@@ -658,6 +658,46 @@ pub enum AuditEvent {
         /// When the routing decision was made.
         timestamp: DateTime<Utc>,
     },
+
+    // --- MCP Streamable HTTP / OAuth events ---
+    /// An MCP OAuth token was automatically refreshed.
+    McpOAuthRefreshed {
+        /// Name of the MCP server whose token was refreshed.
+        server_name: String,
+        /// When the refresh occurred.
+        timestamp: DateTime<Utc>,
+    },
+    /// An MCP async task completed (success, failure, or cancellation).
+    McpTaskCompleted {
+        /// Name of the MCP server that ran the task.
+        server_name: String,
+        /// Server-assigned task identifier.
+        task_id: String,
+        /// Terminal state: "completed", "failed", or "cancelled".
+        state: String,
+        /// Total duration of the task in milliseconds.
+        duration_ms: u64,
+        /// When the task completed.
+        timestamp: DateTime<Utc>,
+    },
+    /// An MCP server requested a sampling/createMessage from the client.
+    McpSamplingRequested {
+        /// Name of the MCP server that initiated the request.
+        server_name: String,
+        /// Maximum tokens requested, if specified.
+        max_tokens: Option<u32>,
+        /// When the request was received.
+        timestamp: DateTime<Utc>,
+    },
+    /// An MCP server requested an elicitation/create from the client.
+    McpElicitationRequested {
+        /// Name of the MCP server that initiated the request.
+        server_name: String,
+        /// Action taken: "accept", "decline", or "dismiss".
+        action_taken: String,
+        /// When the request was handled.
+        timestamp: DateTime<Utc>,
+    },
 }
 
 #[cfg(test)]
@@ -1967,6 +2007,91 @@ mod tests {
         {
             assert_eq!(complexity, "Simple");
             assert_eq!(provider, "haiku");
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    // --- MCP Streamable HTTP / OAuth audit event tests ---
+
+    #[test]
+    fn mcp_oauth_refreshed_serde_roundtrip() {
+        let event = AuditEvent::McpOAuthRefreshed {
+            server_name: "github-mcp".into(),
+            timestamp: Utc::now(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::McpOAuthRefreshed { server_name, .. } = restored {
+            assert_eq!(server_name, "github-mcp");
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn mcp_task_completed_serde_roundtrip() {
+        let event = AuditEvent::McpTaskCompleted {
+            server_name: "build-server".into(),
+            task_id: "task-42".into(),
+            state: "completed".into(),
+            duration_ms: 5000,
+            timestamp: Utc::now(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::McpTaskCompleted {
+            server_name,
+            task_id,
+            state,
+            duration_ms,
+            ..
+        } = restored
+        {
+            assert_eq!(server_name, "build-server");
+            assert_eq!(task_id, "task-42");
+            assert_eq!(state, "completed");
+            assert_eq!(duration_ms, 5000);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn mcp_sampling_requested_serde_roundtrip() {
+        let event = AuditEvent::McpSamplingRequested {
+            server_name: "code-review".into(),
+            max_tokens: Some(1024),
+            timestamp: Utc::now(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::McpSamplingRequested {
+            server_name,
+            max_tokens,
+            ..
+        } = restored
+        {
+            assert_eq!(server_name, "code-review");
+            assert_eq!(max_tokens, Some(1024));
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn mcp_elicitation_requested_serde_roundtrip() {
+        let event = AuditEvent::McpElicitationRequested {
+            server_name: "deploy-tool".into(),
+            action_taken: "accept".into(),
+            timestamp: Utc::now(),
+        };
+        let restored = roundtrip(&event);
+        if let AuditEvent::McpElicitationRequested {
+            server_name,
+            action_taken,
+            ..
+        } = restored
+        {
+            assert_eq!(server_name, "deploy-tool");
+            assert_eq!(action_taken, "accept");
         } else {
             panic!("wrong variant");
         }

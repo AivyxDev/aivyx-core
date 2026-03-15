@@ -11,7 +11,16 @@ use serde_json::Value;
 pub const JSONRPC_VERSION: &str = "2.0";
 
 /// MCP protocol version supported by this client.
-pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+/// Current MCP protocol version supported by this client.
+///
+/// Updated to the 2025-03-26 revision which adds Streamable HTTP transport,
+/// MCP Tasks, and enhanced sampling/elicitation. The client negotiates
+/// gracefully — if a server responds with `"2024-11-05"`, task features
+/// are disabled.
+pub const MCP_PROTOCOL_VERSION: &str = "2025-03-26";
+
+/// Legacy MCP protocol version for backward compatibility.
+pub const MCP_PROTOCOL_VERSION_LEGACY: &str = "2024-11-05";
 
 /// JSON-RPC 2.0 request message.
 #[derive(Debug, Clone, Serialize)]
@@ -121,7 +130,7 @@ pub struct McpServerInfo {
 }
 
 /// MCP `tools/call` result content item.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpContent {
     /// Content type (usually "text").
     #[serde(rename = "type")]
@@ -262,6 +271,45 @@ pub enum ElicitationAction {
     Decline,
     /// The request was dismissed (e.g., in headless/background mode).
     Dismiss,
+}
+
+// ---------------------------------------------------------------------------
+// MCP Tasks protocol types (async tool execution)
+// ---------------------------------------------------------------------------
+
+/// MCP task states for async tool execution.
+///
+/// When a tool call returns a task ID instead of immediate results, the
+/// client polls `tasks/get` until the task reaches a terminal state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum McpTaskState {
+    /// Task is actively executing.
+    Working,
+    /// Task needs user input before it can proceed.
+    InputRequired,
+    /// Task completed successfully.
+    Completed,
+    /// Task failed with an error.
+    Failed,
+    /// Task was cancelled by the client.
+    Cancelled,
+}
+
+/// MCP task status returned by `tasks/get`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpTaskStatus {
+    /// Unique task identifier assigned by the server.
+    pub task_id: String,
+    /// Current task state.
+    pub state: McpTaskState,
+    /// Optional progress indicator (0.0 to 1.0).
+    #[serde(default)]
+    pub progress: Option<f64>,
+    /// Result content (present when state is `Completed`).
+    #[serde(default)]
+    pub content: Option<Vec<McpContent>>,
 }
 
 #[cfg(test)]
@@ -437,5 +485,54 @@ mod tests {
             let restored: ElicitationAction = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, action);
         }
+    }
+
+    #[test]
+    fn task_state_serde_roundtrip() {
+        for state in [
+            McpTaskState::Working,
+            McpTaskState::InputRequired,
+            McpTaskState::Completed,
+            McpTaskState::Failed,
+            McpTaskState::Cancelled,
+        ] {
+            let json = serde_json::to_string(&state).unwrap();
+            let restored: McpTaskState = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored, state);
+        }
+    }
+
+    #[test]
+    fn task_state_camel_case() {
+        let json = serde_json::to_string(&McpTaskState::InputRequired).unwrap();
+        assert_eq!(json, r#""inputRequired""#);
+    }
+
+    #[test]
+    fn task_status_deserialization() {
+        let json = r#"{
+            "taskId": "task-123",
+            "state": "working",
+            "progress": 0.5
+        }"#;
+        let status: McpTaskStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(status.task_id, "task-123");
+        assert_eq!(status.state, McpTaskState::Working);
+        assert_eq!(status.progress, Some(0.5));
+        assert!(status.content.is_none());
+    }
+
+    #[test]
+    fn task_status_completed_with_content() {
+        let json = r#"{
+            "taskId": "task-456",
+            "state": "completed",
+            "content": [{"type": "text", "text": "Build succeeded"}]
+        }"#;
+        let status: McpTaskStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(status.state, McpTaskState::Completed);
+        let content = status.content.unwrap();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].text.as_deref(), Some("Build succeeded"));
     }
 }

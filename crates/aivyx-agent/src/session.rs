@@ -450,6 +450,32 @@ impl AgentSession {
                         error,
                         timestamp: chrono::Utc::now(),
                     },
+                    aivyx_mcp::McpToolCallEvent::TaskPolled {
+                        server_name,
+                        task_id,
+                        state,
+                    } => AuditEvent::McpTaskCompleted {
+                        server_name,
+                        task_id,
+                        state,
+                        duration_ms: 0,
+                        timestamp: chrono::Utc::now(),
+                    },
+                    aivyx_mcp::McpToolCallEvent::SamplingDispatched { server_name } => {
+                        AuditEvent::McpSamplingRequested {
+                            server_name,
+                            max_tokens: None,
+                            timestamp: chrono::Utc::now(),
+                        }
+                    }
+                    aivyx_mcp::McpToolCallEvent::ElicitationDispatched {
+                        server_name,
+                        action,
+                    } => AuditEvent::McpElicitationRequested {
+                        server_name,
+                        action_taken: action,
+                        timestamp: chrono::Utc::now(),
+                    },
                 };
                 if let Err(e) = mcp_audit_log.append(audit_event) {
                     tracing::warn!("Failed to audit MCP tool call: {e}");
@@ -717,7 +743,17 @@ impl AgentSession {
                 let timeout = Duration::from_secs(server_config.timeout_secs);
                 let config_ref = server_config.clone();
                 async move {
-                    let client = aivyx_mcp::McpClient::connect(&config_ref).await?;
+                    let elicitation: Option<std::sync::Arc<dyn aivyx_mcp::ElicitationHandler>> =
+                        Some(std::sync::Arc::new(
+                            aivyx_mcp::AutoDismissElicitationHandler,
+                        ));
+                    let client = aivyx_mcp::McpClient::connect_with_handlers(
+                        &config_ref,
+                        None, // StorageBackend — not yet available in session
+                        None, // SamplingHandler — requires LLM provider wiring
+                        elicitation,
+                    )
+                    .await?;
                     let client = Arc::new(client);
                     // Apply per-server timeout to the init+list sequence.
                     let result = tokio::time::timeout(timeout, async {

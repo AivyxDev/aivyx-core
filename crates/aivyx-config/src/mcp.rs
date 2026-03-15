@@ -70,10 +70,23 @@ pub enum McpTransport {
         #[serde(default)]
         args: Vec<String>,
     },
-    /// SSE transport: connect to an HTTP server endpoint.
+    /// SSE transport: connect to an HTTP server endpoint (legacy).
     #[serde(rename = "sse")]
     Sse {
         /// URL of the MCP server's SSE endpoint.
+        url: String,
+        /// Optional authentication for the remote MCP server.
+        #[serde(default)]
+        auth: Option<McpAuthConfig>,
+    },
+    /// Streamable HTTP transport: single `/mcp` endpoint with optional SSE streaming.
+    ///
+    /// This is the recommended transport for remote MCP servers (MCP spec 2025-03-26).
+    /// Supports session management via `Mcp-Session-Id` header and bidirectional
+    /// communication (sampling/elicitation) via SSE in the response body.
+    #[serde(rename = "streamable_http")]
+    StreamableHttp {
+        /// URL of the MCP server's endpoint (e.g., `https://server.example.com/mcp`).
         url: String,
         /// Optional authentication for the remote MCP server.
         #[serde(default)]
@@ -102,6 +115,9 @@ pub enum McpAuthMethod {
         /// Requested OAuth scopes.
         #[serde(default)]
         scopes: Vec<String>,
+        /// Redirect URI for the OAuth callback flow.
+        #[serde(default)]
+        redirect_uri: Option<String>,
     },
     /// Static Bearer token — uses a pre-configured token stored in the
     /// encrypted secrets store.
@@ -237,7 +253,9 @@ mod tests {
         } = &config.transport
         {
             match &auth.method {
-                McpAuthMethod::OAuth { client_id, scopes } => {
+                McpAuthMethod::OAuth {
+                    client_id, scopes, ..
+                } => {
                     assert_eq!(client_id, "my-client-id");
                     assert_eq!(scopes.len(), 2);
                 }
@@ -403,6 +421,101 @@ mod tests {
         // Reconnection fields get defaults too.
         assert_eq!(config.max_reconnect_attempts, 3);
         assert_eq!(config.reconnect_backoff_ms, 1000);
+    }
+
+    #[test]
+    fn streamable_http_config_roundtrip() {
+        let config = McpServerConfig {
+            name: "remote-mcp".into(),
+            transport: McpTransport::StreamableHttp {
+                url: "https://mcp.example.com/mcp".into(),
+                auth: None,
+            },
+            env: HashMap::new(),
+            timeout_secs: 60,
+            allowed_tools: None,
+            blocked_tools: None,
+            max_reconnect_attempts: 3,
+            reconnect_backoff_ms: 1000,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: McpServerConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.name, "remote-mcp");
+        if let McpTransport::StreamableHttp { url, auth } = &restored.transport {
+            assert_eq!(url, "https://mcp.example.com/mcp");
+            assert!(auth.is_none());
+        } else {
+            panic!("wrong transport variant");
+        }
+    }
+
+    #[test]
+    fn streamable_http_with_oauth_toml() {
+        let toml_str = r#"
+            name = "oauth-mcp"
+            [transport]
+            type = "streamable_http"
+            url = "https://mcp.example.com/mcp"
+            [transport.auth]
+            [transport.auth.method]
+            type = "oauth"
+            client_id = "aivyx-client"
+            scopes = ["tools:read"]
+            redirect_uri = "http://localhost:8976/callback"
+        "#;
+        let config: McpServerConfig = toml::from_str(toml_str).unwrap();
+        if let McpTransport::StreamableHttp {
+            auth: Some(auth), ..
+        } = &config.transport
+        {
+            match &auth.method {
+                McpAuthMethod::OAuth {
+                    client_id,
+                    scopes,
+                    redirect_uri,
+                } => {
+                    assert_eq!(client_id, "aivyx-client");
+                    assert_eq!(scopes, &["tools:read"]);
+                    assert_eq!(
+                        redirect_uri.as_deref(),
+                        Some("http://localhost:8976/callback")
+                    );
+                }
+                _ => panic!("expected OAuth method"),
+            }
+        } else {
+            panic!("expected StreamableHttp with auth");
+        }
+    }
+
+    #[test]
+    fn oauth_redirect_uri_backward_compat() {
+        // Existing OAuth configs without redirect_uri should still parse.
+        let toml_str = r#"
+            name = "legacy-oauth"
+            [transport]
+            type = "sse"
+            url = "https://mcp.example.com/sse"
+            [transport.auth]
+            [transport.auth.method]
+            type = "oauth"
+            client_id = "old-client"
+            scopes = ["read"]
+        "#;
+        let config: McpServerConfig = toml::from_str(toml_str).unwrap();
+        if let McpTransport::Sse {
+            auth: Some(auth), ..
+        } = &config.transport
+        {
+            match &auth.method {
+                McpAuthMethod::OAuth { redirect_uri, .. } => {
+                    assert!(redirect_uri.is_none());
+                }
+                _ => panic!("expected OAuth method"),
+            }
+        } else {
+            panic!("expected Sse with auth");
+        }
     }
 
     #[test]

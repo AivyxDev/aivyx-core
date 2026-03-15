@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::cache::ToolResultCache;
 use crate::pool::McpServerPool;
-use crate::protocol::McpToolDef;
+use crate::protocol::{McpTaskState, McpToolDef};
 
 /// Events emitted during MCP tool call execution for observability.
 #[derive(Debug, Clone)]
@@ -35,6 +35,16 @@ pub enum McpToolCallEvent {
         tool_name: String,
         error: String,
     },
+    /// An async task was polled for status.
+    TaskPolled {
+        server_name: String,
+        task_id: String,
+        state: String,
+    },
+    /// A sampling request was dispatched to the LLM.
+    SamplingDispatched { server_name: String },
+    /// An elicitation request was dispatched.
+    ElicitationDispatched { server_name: String, action: String },
 }
 
 /// Observer callback for MCP tool call lifecycle events.
@@ -82,6 +92,88 @@ impl McpProxyTool {
             cache,
             observer: None,
         }
+    }
+
+    /// Check if a tool call result indicates an async task, and if so, poll
+    /// until completion or timeout.
+    async fn maybe_poll_task(&self, result: Value) -> Result<Value> {
+        let task_id = match result.get("taskId").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(result), // Not an async task.
+        };
+
+        let state_str = result
+            .get("state")
+            .and_then(|v| v.as_str())
+            .unwrap_or("completed");
+
+        // Only poll if the task is still in progress.
+        if state_str != "working" && state_str != "inputRequired" {
+            return Ok(result);
+        }
+
+        let client = self.pool.get(&self.server_name).await.ok_or_else(|| {
+            aivyx_core::AivyxError::Other(format!("MCP server '{}' not in pool", self.server_name))
+        })?;
+
+        let poll_interval = std::time::Duration::from_secs(2);
+        let max_polls = 150; // 5 minutes at 2s interval
+
+        for _ in 0..max_polls {
+            tokio::time::sleep(poll_interval).await;
+
+            let status = client.get_task_status(&task_id).await?;
+
+            if let Some(obs) = &self.observer {
+                obs(McpToolCallEvent::TaskPolled {
+                    server_name: self.server_name.clone(),
+                    task_id: task_id.clone(),
+                    state: format!("{:?}", status.state),
+                });
+            }
+
+            match status.state {
+                McpTaskState::Completed => {
+                    let content = status
+                        .content
+                        .map(|items| {
+                            let text: String = items
+                                .iter()
+                                .filter_map(|c| c.text.as_deref())
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            serde_json::json!({ "content": text })
+                        })
+                        .unwrap_or_else(|| serde_json::json!({ "content": "" }));
+                    return Ok(content);
+                }
+                McpTaskState::Failed => {
+                    let error_text = status
+                        .content
+                        .and_then(|items| items.first().and_then(|c| c.text.clone()))
+                        .unwrap_or_else(|| "task failed".into());
+                    return Ok(serde_json::json!({
+                        "error": true,
+                        "content": error_text,
+                    }));
+                }
+                McpTaskState::Cancelled => {
+                    return Ok(serde_json::json!({
+                        "error": true,
+                        "content": "task was cancelled",
+                    }));
+                }
+                McpTaskState::Working | McpTaskState::InputRequired => {
+                    // Continue polling.
+                }
+            }
+        }
+
+        // Timeout — cancel the task.
+        let _ = client.cancel_task(&task_id).await;
+        Err(aivyx_core::AivyxError::Other(format!(
+            "MCP task '{task_id}' timed out after polling"
+        )))
     }
 
     /// Create a new proxy tool with an observer for audit/observability.
@@ -156,6 +248,9 @@ impl Tool for McpProxyTool {
         // Forward to MCP server; retry once after reconnection on failure.
         match client.call_tool(self.name(), input.clone()).await {
             Ok(result) => {
+                // Check for async task — poll if needed.
+                let result = self.maybe_poll_task(result).await?;
+
                 if let Some(obs) = &self.observer {
                     obs(McpToolCallEvent::Completed {
                         server_name: self.server_name.clone(),
@@ -183,6 +278,7 @@ impl Tool for McpProxyTool {
                     Ok(new_client) => {
                         match new_client.call_tool(self.name(), input.clone()).await {
                             Ok(result) => {
+                                let result = self.maybe_poll_task(result).await?;
                                 if let Some(obs) = &self.observer {
                                     obs(McpToolCallEvent::Completed {
                                         server_name: self.server_name.clone(),
@@ -401,6 +497,9 @@ mod tests {
                 McpToolCallEvent::Started { .. } => "started",
                 McpToolCallEvent::Completed { .. } => "completed",
                 McpToolCallEvent::Failed { .. } => "failed",
+                McpToolCallEvent::TaskPolled { .. } => "task_polled",
+                McpToolCallEvent::SamplingDispatched { .. } => "sampling",
+                McpToolCallEvent::ElicitationDispatched { .. } => "elicitation",
             };
             events_clone.lock().unwrap().push(label.into());
         });
@@ -437,6 +536,9 @@ mod tests {
                 McpToolCallEvent::Started { .. } => "started",
                 McpToolCallEvent::Completed { .. } => "completed",
                 McpToolCallEvent::Failed { .. } => "failed",
+                McpToolCallEvent::TaskPolled { .. } => "task_polled",
+                McpToolCallEvent::SamplingDispatched { .. } => "sampling",
+                McpToolCallEvent::ElicitationDispatched { .. } => "elicitation",
             };
             events_clone.lock().unwrap().push(label.into());
         });

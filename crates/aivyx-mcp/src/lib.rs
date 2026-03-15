@@ -62,15 +62,17 @@ pub mod client;
 pub mod pool;
 pub mod protocol;
 pub mod proxy;
+pub mod streamable;
 pub mod transport;
 
-pub use auth::{McpOAuthClient, OAuthMetadata, OAuthTokens, PkceChallenge};
+pub use auth::{McpOAuthClient, OAuthMetadata, OAuthTokenManager, OAuthTokens, PkceChallenge};
 pub use cache::ToolResultCache;
 pub use client::{AutoDismissElicitationHandler, ElicitationHandler, McpClient, SamplingHandler};
 pub use pool::{McpServerHealth, McpServerPool};
 pub use protocol::{
-    ElicitationAction, ElicitationRequest, ElicitationResponse, McpToolDef, SamplingContent,
-    SamplingMessage, SamplingRequest, SamplingResponse,
+    ElicitationAction, ElicitationRequest, ElicitationResponse, McpTaskState, McpTaskStatus,
+    McpToolDef, SamplingContent, SamplingMessage, SamplingRequest, SamplingResponse,
 };
 pub use proxy::{McpProxyTool, McpToolCallEvent, McpToolCallObserver};
+pub use streamable::StreamableHttpTransport;
 pub use transport::McpTransportLayer;

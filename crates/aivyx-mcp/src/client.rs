@@ -10,10 +10,12 @@ use aivyx_core::{AivyxError, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::auth::OAuthTokenManager;
 use crate::protocol::{
     CallToolResult, ElicitationRequest, ElicitationResponse, InitializeResult, JsonRpcRequest,
-    MCP_PROTOCOL_VERSION, McpToolDef, SamplingRequest, SamplingResponse,
+    MCP_PROTOCOL_VERSION, McpTaskStatus, McpToolDef, SamplingRequest, SamplingResponse,
 };
+use crate::streamable::StreamableHttpTransport;
 use crate::transport::{McpTransportLayer, SseTransport, StdioTransport};
 
 /// Handler for MCP server-initiated sampling requests.
@@ -94,12 +96,39 @@ impl McpClient {
                             );
                             SseTransport::new(url, timeout)
                         }
-                        aivyx_config::McpAuthMethod::OAuth { client_id, scopes } => {
+                        aivyx_config::McpAuthMethod::OAuth {
+                            client_id, scopes, ..
+                        } => {
                             tracing::debug!(
                                 server = %config.name,
                                 client_id = %client_id,
                                 scopes = ?scopes,
                                 "MCP SSE transport with OAuth (token must be provided at runtime)"
+                            );
+                            SseTransport::new(url, timeout)
+                        }
+                    }
+                } else {
+                    SseTransport::new(url, timeout)
+                };
+                Box::new(t)
+            }
+            McpTransportConfig::StreamableHttp { url, auth } => {
+                // Streamable HTTP uses the same SseTransport as a fallback
+                // until StreamableHttpTransport is wired in via connect_with_handlers().
+                let t = if let Some(auth_config) = auth {
+                    match &auth_config.method {
+                        aivyx_config::McpAuthMethod::Bearer { token_secret_name } => {
+                            tracing::debug!(
+                                server = %config.name,
+                                "MCP Streamable HTTP with bearer auth (secret: {token_secret_name})"
+                            );
+                            SseTransport::new(url, timeout)
+                        }
+                        aivyx_config::McpAuthMethod::OAuth { .. } => {
+                            tracing::debug!(
+                                server = %config.name,
+                                "MCP Streamable HTTP with OAuth — use connect_with_handlers() for full support"
                             );
                             SseTransport::new(url, timeout)
                         }
@@ -128,6 +157,140 @@ impl McpClient {
             server_name: server_name.into(),
             next_id: AtomicU64::new(1),
         }
+    }
+
+    /// Connect to an MCP server with full handler support.
+    ///
+    /// Unlike [`connect`](McpClient::connect), this method wires sampling and
+    /// elicitation handlers into the transport, and uses the real
+    /// `StreamableHttpTransport` for `StreamableHttp` configs with OAuth
+    /// token management.
+    pub async fn connect_with_handlers(
+        config: &McpServerConfig,
+        store: Option<std::sync::Arc<dyn aivyx_core::StorageBackend>>,
+        sampling: Option<std::sync::Arc<dyn SamplingHandler>>,
+        elicitation: Option<std::sync::Arc<dyn ElicitationHandler>>,
+    ) -> Result<Self> {
+        let timeout = std::time::Duration::from_secs(config.timeout_secs);
+        let transport: Box<dyn McpTransportLayer> = match &config.transport {
+            McpTransportConfig::Stdio { command, args } => {
+                let t = StdioTransport::spawn_with_handlers(
+                    command,
+                    args,
+                    &config.env,
+                    timeout,
+                    sampling.clone(),
+                    elicitation.clone(),
+                )
+                .await?;
+                Box::new(t)
+            }
+            McpTransportConfig::Sse { url, auth } => {
+                // Legacy SSE transport — no handler support, just auth.
+                let t = if let Some(auth_config) = auth {
+                    match &auth_config.method {
+                        aivyx_config::McpAuthMethod::Bearer { token_secret_name } => {
+                            if let Some(ref s) = store {
+                                if let Ok(Some(bytes)) = s.get(token_secret_name) {
+                                    let token = String::from_utf8_lossy(&bytes).to_string();
+                                    SseTransport::with_auth(url, timeout, format!("Bearer {token}"))
+                                } else {
+                                    SseTransport::new(url, timeout)
+                                }
+                            } else {
+                                SseTransport::new(url, timeout)
+                            }
+                        }
+                        aivyx_config::McpAuthMethod::OAuth { .. } => {
+                            SseTransport::new(url, timeout)
+                        }
+                    }
+                } else {
+                    SseTransport::new(url, timeout)
+                };
+                Box::new(t)
+            }
+            McpTransportConfig::StreamableHttp { url, auth } => {
+                let t = if let Some(auth_config) = auth {
+                    match &auth_config.method {
+                        aivyx_config::McpAuthMethod::Bearer { token_secret_name } => {
+                            // Resolve token from store.
+                            let auth_header = if let Some(ref s) = store {
+                                if let Ok(Some(bytes)) = s.get(token_secret_name) {
+                                    Some(format!("Bearer {}", String::from_utf8_lossy(&bytes)))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+                            if let Some(header) = auth_header {
+                                StreamableHttpTransport::with_static_auth(
+                                    url,
+                                    timeout,
+                                    header,
+                                    sampling.clone(),
+                                    elicitation.clone(),
+                                )
+                            } else {
+                                StreamableHttpTransport::with_handlers(
+                                    url,
+                                    timeout,
+                                    sampling.clone(),
+                                    elicitation.clone(),
+                                )
+                            }
+                        }
+                        aivyx_config::McpAuthMethod::OAuth {
+                            client_id, scopes, ..
+                        } => {
+                            // Create OAuth token manager for automatic refresh.
+                            if let Some(ref s) = store {
+                                let oauth = crate::auth::McpOAuthClient::new(
+                                    client_id,
+                                    scopes.clone(),
+                                    "", // Discovery will populate endpoints
+                                    "", // Discovery will populate endpoints
+                                );
+                                let tm = std::sync::Arc::new(OAuthTokenManager::new(
+                                    oauth,
+                                    &config.name,
+                                    s.clone(),
+                                ));
+                                StreamableHttpTransport::with_auth(
+                                    url,
+                                    timeout,
+                                    tm,
+                                    sampling.clone(),
+                                    elicitation.clone(),
+                                )
+                            } else {
+                                StreamableHttpTransport::with_handlers(
+                                    url,
+                                    timeout,
+                                    sampling.clone(),
+                                    elicitation.clone(),
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    StreamableHttpTransport::with_handlers(
+                        url,
+                        timeout,
+                        sampling.clone(),
+                        elicitation.clone(),
+                    )
+                };
+                Box::new(t)
+            }
+        };
+
+        Ok(Self {
+            transport,
+            server_name: config.name.clone(),
+            next_id: AtomicU64::new(1),
+        })
     }
 
     /// Send the MCP `initialize` handshake.
@@ -239,6 +402,28 @@ impl McpClient {
     /// Gracefully shut down the MCP connection.
     pub async fn shutdown(&self) -> Result<()> {
         self.transport.shutdown().await
+    }
+
+    /// Get the status of an MCP task (async tool execution).
+    ///
+    /// Sends a `tasks/get` request to query the current state of a
+    /// previously started asynchronous task.
+    pub async fn get_task_status(&self, task_id: &str) -> Result<McpTaskStatus> {
+        let params = serde_json::json!({ "taskId": task_id });
+        let request = JsonRpcRequest::new(self.next_request_id(), "tasks/get", Some(params));
+        let response = self.transport.send(&request).await?;
+        let result = response.into_result()?;
+        serde_json::from_value(result)
+            .map_err(|e| AivyxError::Other(format!("failed to parse task status: {e}")))
+    }
+
+    /// Cancel an MCP task.
+    pub async fn cancel_task(&self, task_id: &str) -> Result<()> {
+        let params = serde_json::json!({ "taskId": task_id });
+        let request = JsonRpcRequest::new(self.next_request_id(), "tasks/cancel", Some(params));
+        let response = self.transport.send(&request).await?;
+        response.into_result()?;
+        Ok(())
     }
 
     /// Get the server name.
@@ -382,5 +567,39 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result["error"], true);
+    }
+
+    #[tokio::test]
+    async fn get_task_status_returns_state() {
+        let task_response = JsonRpcResponse {
+            id: Some(1),
+            result: Some(serde_json::json!({
+                "taskId": "task-42",
+                "state": "working",
+                "progress": 0.3
+            })),
+            error: None,
+        };
+
+        let transport = MockTransport::new(vec![task_response]);
+        let client = McpClient::from_transport(Box::new(transport), "test");
+        let status = client.get_task_status("task-42").await.unwrap();
+        assert_eq!(status.task_id, "task-42");
+        assert_eq!(status.state, crate::protocol::McpTaskState::Working);
+        assert_eq!(status.progress, Some(0.3));
+    }
+
+    #[tokio::test]
+    async fn cancel_task_sends_request() {
+        let cancel_response = JsonRpcResponse {
+            id: Some(1),
+            result: Some(serde_json::json!({})),
+            error: None,
+        };
+
+        let transport = MockTransport::new(vec![cancel_response]);
+        let client = McpClient::from_transport(Box::new(transport), "test");
+        let result = client.cancel_task("task-42").await;
+        assert!(result.is_ok());
     }
 }

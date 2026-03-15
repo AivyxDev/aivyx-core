@@ -16,8 +16,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
-use crate::client::SamplingHandler;
-use crate::protocol::{JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, SamplingRequest};
+use crate::client::{ElicitationHandler, SamplingHandler};
+use crate::protocol::{
+    ElicitationRequest, JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, SamplingRequest,
+};
 
 /// Trait for MCP transport layers that send requests and receive responses.
 #[async_trait]
@@ -67,7 +69,7 @@ impl StdioTransport {
         env: &HashMap<String, String>,
         timeout: Duration,
     ) -> Result<Self> {
-        Self::spawn_inner(command, args, env, timeout, None).await
+        Self::spawn_inner(command, args, env, timeout, None, None).await
     }
 
     /// Spawn a child process with an optional sampling handler for
@@ -83,7 +85,27 @@ impl StdioTransport {
         timeout: Duration,
         sampling_handler: Arc<dyn SamplingHandler>,
     ) -> Result<Self> {
-        Self::spawn_inner(command, args, env, timeout, Some(sampling_handler)).await
+        Self::spawn_inner(command, args, env, timeout, Some(sampling_handler), None).await
+    }
+
+    /// Spawn a child process with both sampling and elicitation handlers.
+    pub async fn spawn_with_handlers(
+        command: &str,
+        args: &[String],
+        env: &HashMap<String, String>,
+        timeout: Duration,
+        sampling_handler: Option<Arc<dyn SamplingHandler>>,
+        elicitation_handler: Option<Arc<dyn ElicitationHandler>>,
+    ) -> Result<Self> {
+        Self::spawn_inner(
+            command,
+            args,
+            env,
+            timeout,
+            sampling_handler,
+            elicitation_handler,
+        )
+        .await
     }
 
     async fn spawn_inner(
@@ -92,6 +114,7 @@ impl StdioTransport {
         env: &HashMap<String, String>,
         timeout: Duration,
         sampling_handler: Option<Arc<dyn SamplingHandler>>,
+        elicitation_handler: Option<Arc<dyn ElicitationHandler>>,
     ) -> Result<Self> {
         let mut cmd = Command::new(command);
         cmd.args(args)
@@ -178,6 +201,36 @@ impl StdioTransport {
                                                         "error": {
                                                             "code": -32601,
                                                             "message": "sampling not supported"
+                                                        }
+                                                    });
+                                                    let mut json = serde_json::to_string(&error_resp)
+                                                        .unwrap_or_default();
+                                                    json.push('\n');
+                                                    let mut stdin = stdin_reader.lock().await;
+                                                    let _ = stdin.write_all(json.as_bytes()).await;
+                                                    let _ = stdin.flush().await;
+                                                }
+                                            }
+                                        } else if req.method == "elicitation/create" {
+                                            if let Some(ref handler) = elicitation_handler {
+                                                Self::handle_elicitation_request(
+                                                    req.id,
+                                                    req.params,
+                                                    handler.clone(),
+                                                    stdin_reader.clone(),
+                                                )
+                                                .await;
+                                            } else {
+                                                tracing::warn!(
+                                                    "MCP server sent elicitation/create but no handler configured"
+                                                );
+                                                if let Some(id) = req.id {
+                                                    let error_resp = serde_json::json!({
+                                                        "jsonrpc": "2.0",
+                                                        "id": id,
+                                                        "error": {
+                                                            "code": -32601,
+                                                            "message": "elicitation not supported"
                                                         }
                                                     });
                                                     let mut json = serde_json::to_string(&error_resp)
@@ -276,6 +329,71 @@ impl StdioTransport {
             }
             Err(e) => {
                 tracing::error!("sampling handler error: {e}");
+                let error_resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {"code": -32000, "message": e.to_string()}
+                });
+                let mut json = serde_json::to_string(&error_resp).unwrap_or_default();
+                json.push('\n');
+                let mut stdin = stdin.lock().await;
+                let _ = stdin.write_all(json.as_bytes()).await;
+                let _ = stdin.flush().await;
+            }
+        }
+    }
+
+    /// Handle an `elicitation/create` request from the MCP server.
+    async fn handle_elicitation_request(
+        request_id: Option<u64>,
+        params: Option<serde_json::Value>,
+        handler: Arc<dyn ElicitationHandler>,
+        stdin: Arc<Mutex<tokio::process::ChildStdin>>,
+    ) {
+        let Some(id) = request_id else {
+            tracing::warn!("elicitation/create request has no ID — cannot respond");
+            return;
+        };
+
+        let elicitation_req = match params {
+            Some(p) => match serde_json::from_value::<ElicitationRequest>(p) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("failed to parse elicitation request: {e}");
+                    let error_resp = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {"code": -32602, "message": format!("invalid params: {e}")}
+                    });
+                    let mut json = serde_json::to_string(&error_resp).unwrap_or_default();
+                    json.push('\n');
+                    let mut stdin = stdin.lock().await;
+                    let _ = stdin.write_all(json.as_bytes()).await;
+                    let _ = stdin.flush().await;
+                    return;
+                }
+            },
+            None => {
+                tracing::warn!("elicitation/create request has no params");
+                return;
+            }
+        };
+
+        match handler.elicit(elicitation_req).await {
+            Ok(response) => {
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": response,
+                });
+                let mut json = serde_json::to_string(&resp).unwrap_or_default();
+                json.push('\n');
+                let mut stdin = stdin.lock().await;
+                let _ = stdin.write_all(json.as_bytes()).await;
+                let _ = stdin.flush().await;
+            }
+            Err(e) => {
+                tracing::error!("elicitation handler error: {e}");
                 let error_resp = serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": id,

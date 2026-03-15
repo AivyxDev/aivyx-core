@@ -243,6 +243,151 @@ impl McpOAuthClient {
     }
 }
 
+// ---------------------------------------------------------------------------
+// OAuth Token Lifecycle Manager
+// ---------------------------------------------------------------------------
+
+/// In-memory token state with expiry tracking.
+struct TokenState {
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Manages the lifecycle of OAuth tokens for an MCP server connection.
+///
+/// Provides a single `get_valid_token()` method that transparently handles
+/// token caching, automatic refresh before expiry, and persistence to an
+/// encrypted store. Uses a `tokio::Mutex` to serialize concurrent refresh
+/// attempts.
+pub struct OAuthTokenManager {
+    oauth_client: McpOAuthClient,
+    /// Key for persisting tokens: `"mcp_oauth:<server_name>"`.
+    store_key: String,
+    /// In-memory cached token state.
+    state: tokio::sync::Mutex<TokenState>,
+    /// Persistent storage for tokens across restarts.
+    store: std::sync::Arc<dyn aivyx_core::StorageBackend>,
+}
+
+impl OAuthTokenManager {
+    /// Create a new token manager, loading any persisted tokens from storage.
+    pub fn new(
+        oauth_client: McpOAuthClient,
+        server_name: &str,
+        store: std::sync::Arc<dyn aivyx_core::StorageBackend>,
+    ) -> Self {
+        let store_key = format!("mcp_oauth:{server_name}");
+
+        // Try to load persisted tokens.
+        let state = match store.get(&store_key) {
+            Ok(Some(bytes)) => {
+                if let Ok(tokens) = serde_json::from_slice::<OAuthTokens>(&bytes) {
+                    let expires_at = tokens.expires_in.map(|secs| {
+                        // Approximate: assume stored token was persisted recently.
+                        // On next get_valid_token() call, the expiry check will
+                        // trigger a refresh if needed.
+                        chrono::Utc::now() + chrono::Duration::seconds(secs as i64)
+                    });
+                    tracing::debug!("Loaded persisted OAuth tokens for MCP server '{server_name}'");
+                    TokenState {
+                        access_token: Some(tokens.access_token),
+                        refresh_token: tokens.refresh_token,
+                        expires_at,
+                    }
+                } else {
+                    TokenState {
+                        access_token: None,
+                        refresh_token: None,
+                        expires_at: None,
+                    }
+                }
+            }
+            _ => TokenState {
+                access_token: None,
+                refresh_token: None,
+                expires_at: None,
+            },
+        };
+
+        Self {
+            oauth_client,
+            store_key,
+            state: tokio::sync::Mutex::new(state),
+            store,
+        }
+    }
+
+    /// Get a valid access token, refreshing automatically if expired.
+    ///
+    /// Returns the current access token if it is still valid (expires more
+    /// than 60 seconds in the future). Otherwise, attempts to refresh using
+    /// the stored refresh token.
+    pub async fn get_valid_token(&self) -> Result<String> {
+        let mut state = self.state.lock().await;
+
+        // Check if current token is still valid (with 60s buffer).
+        if let Some(ref token) = state.access_token {
+            if let Some(expires_at) = state.expires_at {
+                let buffer = chrono::Duration::seconds(60);
+                if chrono::Utc::now() + buffer < expires_at {
+                    return Ok(token.clone());
+                }
+            } else {
+                // No expiry info — assume token is valid.
+                return Ok(token.clone());
+            }
+        }
+
+        // Token is expired or missing — try to refresh.
+        if let Some(ref refresh_token) = state.refresh_token.clone() {
+            match self.oauth_client.refresh(refresh_token).await {
+                Ok(tokens) => {
+                    let access_token = tokens.access_token.clone();
+                    state.access_token = Some(tokens.access_token.clone());
+                    state.refresh_token =
+                        tokens.refresh_token.clone().or(state.refresh_token.take());
+                    state.expires_at = tokens
+                        .expires_in
+                        .map(|secs| chrono::Utc::now() + chrono::Duration::seconds(secs as i64));
+
+                    // Persist updated tokens.
+                    if let Ok(bytes) = serde_json::to_vec(&tokens)
+                        && let Err(e) = self.store.put(&self.store_key, &bytes)
+                    {
+                        tracing::warn!("Failed to persist OAuth tokens: {e}");
+                    }
+
+                    tracing::info!("OAuth token refreshed for MCP server");
+                    return Ok(access_token);
+                }
+                Err(e) => {
+                    tracing::warn!("OAuth token refresh failed: {e}");
+                }
+            }
+        }
+
+        // No valid token and refresh failed.
+        Err(AivyxError::Http(
+            "OAuth re-authorization required — no valid token or refresh failed".into(),
+        ))
+    }
+
+    /// Store tokens after an initial authorization code exchange.
+    pub async fn set_tokens(&self, tokens: OAuthTokens) -> Result<()> {
+        let mut state = self.state.lock().await;
+        state.access_token = Some(tokens.access_token.clone());
+        state.refresh_token = tokens.refresh_token.clone();
+        state.expires_at = tokens
+            .expires_in
+            .map(|secs| chrono::Utc::now() + chrono::Duration::seconds(secs as i64));
+
+        let bytes = serde_json::to_vec(&tokens).map_err(|e| AivyxError::Other(e.to_string()))?;
+        self.store.put(&self.store_key, &bytes)?;
+        Ok(())
+    }
+}
+
 /// Base64url-encode bytes without padding (per RFC 7636).
 fn base64url_encode(bytes: &[u8]) -> String {
     use base64::Engine;
@@ -258,6 +403,7 @@ fn s256_challenge(verifier: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aivyx_core::StorageBackend;
 
     #[test]
     fn pkce_challenge_is_deterministic_for_same_verifier() {
@@ -350,5 +496,139 @@ mod tests {
             "https://auth.example.com/authorize"
         );
         assert_eq!(client.token_endpoint(), "https://auth.example.com/token");
+    }
+
+    /// In-memory StorageBackend for testing.
+    struct MemoryStore {
+        data: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+    }
+
+    impl MemoryStore {
+        fn new() -> Self {
+            Self {
+                data: std::sync::Mutex::new(std::collections::HashMap::new()),
+            }
+        }
+    }
+
+    impl aivyx_core::StorageBackend for MemoryStore {
+        fn put(&self, key: &str, value: &[u8]) -> aivyx_core::Result<()> {
+            self.data
+                .lock()
+                .unwrap()
+                .insert(key.to_string(), value.to_vec());
+            Ok(())
+        }
+
+        fn get(&self, key: &str) -> aivyx_core::Result<Option<Vec<u8>>> {
+            Ok(self.data.lock().unwrap().get(key).cloned())
+        }
+
+        fn delete(&self, key: &str) -> aivyx_core::Result<()> {
+            self.data.lock().unwrap().remove(key);
+            Ok(())
+        }
+
+        fn list_keys(&self) -> aivyx_core::Result<Vec<String>> {
+            Ok(self.data.lock().unwrap().keys().cloned().collect())
+        }
+    }
+
+    #[test]
+    fn token_manager_starts_empty() {
+        let oauth = McpOAuthClient::new(
+            "test",
+            vec![],
+            "https://auth.example.com/authorize",
+            "https://auth.example.com/token",
+        );
+        let store = std::sync::Arc::new(MemoryStore::new());
+        let manager = OAuthTokenManager::new(oauth, "test-server", store);
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(manager.get_valid_token());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("re-authorization"));
+    }
+
+    #[tokio::test]
+    async fn token_manager_set_and_get() {
+        let oauth = McpOAuthClient::new(
+            "test",
+            vec![],
+            "https://auth.example.com/authorize",
+            "https://auth.example.com/token",
+        );
+        let store = std::sync::Arc::new(MemoryStore::new());
+        let manager = OAuthTokenManager::new(oauth, "test-server", store.clone());
+
+        let tokens = OAuthTokens {
+            access_token: "test-access-token".into(),
+            refresh_token: Some("test-refresh".into()),
+            expires_in: Some(3600),
+            token_type: "Bearer".into(),
+        };
+        manager.set_tokens(tokens).await.unwrap();
+
+        let token = manager.get_valid_token().await.unwrap();
+        assert_eq!(token, "test-access-token");
+
+        // Verify persistence.
+        let stored = store.get("mcp_oauth:test-server").unwrap();
+        assert!(stored.is_some());
+    }
+
+    #[tokio::test]
+    async fn token_manager_loads_from_store() {
+        let store = std::sync::Arc::new(MemoryStore::new());
+
+        // Pre-populate store.
+        let tokens = OAuthTokens {
+            access_token: "persisted-token".into(),
+            refresh_token: None,
+            expires_in: Some(7200),
+            token_type: "Bearer".into(),
+        };
+        store
+            .put(
+                "mcp_oauth:loaded-server",
+                &serde_json::to_vec(&tokens).unwrap(),
+            )
+            .unwrap();
+
+        let oauth = McpOAuthClient::new(
+            "test",
+            vec![],
+            "https://auth.example.com/authorize",
+            "https://auth.example.com/token",
+        );
+        let manager = OAuthTokenManager::new(oauth, "loaded-server", store.clone());
+
+        let token = manager.get_valid_token().await.unwrap();
+        assert_eq!(token, "persisted-token");
+    }
+
+    #[tokio::test]
+    async fn token_manager_returns_cached_when_not_expired() {
+        let oauth = McpOAuthClient::new(
+            "test",
+            vec![],
+            "https://auth.example.com/authorize",
+            "https://auth.example.com/token",
+        );
+        let store = std::sync::Arc::new(MemoryStore::new());
+        let manager = OAuthTokenManager::new(oauth, "cache-test", store);
+
+        let tokens = OAuthTokens {
+            access_token: "cached-token".into(),
+            refresh_token: None,
+            expires_in: Some(3600), // 1 hour from now
+            token_type: "Bearer".into(),
+        };
+        manager.set_tokens(tokens).await.unwrap();
+
+        // Should return cached token without attempting refresh.
+        let token = manager.get_valid_token().await.unwrap();
+        assert_eq!(token, "cached-token");
     }
 }
