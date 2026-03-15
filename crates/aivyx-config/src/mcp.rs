@@ -35,11 +35,26 @@ pub struct McpServerConfig {
     /// Cannot be set together with `allowed_tools`.
     #[serde(default)]
     pub blocked_tools: Option<Vec<String>>,
+    /// Maximum reconnection attempts before giving up. Default: 3.
+    #[serde(default = "default_max_reconnect_attempts")]
+    pub max_reconnect_attempts: u32,
+    /// Base delay in milliseconds for exponential backoff between reconnection
+    /// attempts. Actual delay is `base * 2^(attempt-1)`. Default: 1000ms.
+    #[serde(default = "default_reconnect_backoff_ms")]
+    pub reconnect_backoff_ms: u64,
 }
 
 /// Default MCP operation timeout: 30 seconds.
 fn default_timeout_secs() -> u64 {
     30
+}
+
+fn default_max_reconnect_attempts() -> u32 {
+    3
+}
+
+fn default_reconnect_backoff_ms() -> u64 {
+    1000
 }
 
 /// Transport type for connecting to an MCP server.
@@ -166,6 +181,8 @@ mod tests {
             timeout_secs: 30,
             allowed_tools: None,
             blocked_tools: None,
+            max_reconnect_attempts: 3,
+            reconnect_backoff_ms: 1000,
         };
 
         let toml_str = toml::to_string_pretty(&config).unwrap();
@@ -186,6 +203,8 @@ mod tests {
             timeout_secs: 60,
             allowed_tools: None,
             blocked_tools: None,
+            max_reconnect_attempts: 3,
+            reconnect_backoff_ms: 1000,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -286,6 +305,8 @@ mod tests {
             timeout_secs: 30,
             allowed_tools: Some(vec!["echo".into(), "read".into()]),
             blocked_tools: None,
+            max_reconnect_attempts: 3,
+            reconnect_backoff_ms: 1000,
         };
         assert!(config.is_tool_allowed("echo"));
         assert!(config.is_tool_allowed("read"));
@@ -322,6 +343,8 @@ mod tests {
             timeout_secs: 30,
             allowed_tools: None,
             blocked_tools: None,
+            max_reconnect_attempts: 3,
+            reconnect_backoff_ms: 1000,
         };
         assert!(config.is_tool_allowed("anything"));
     }
@@ -354,6 +377,8 @@ mod tests {
             timeout_secs: 30,
             allowed_tools: Some(vec!["a".into()]),
             blocked_tools: None,
+            max_reconnect_attempts: 3,
+            reconnect_backoff_ms: 1000,
         };
         assert!(config.validate().is_ok());
     }

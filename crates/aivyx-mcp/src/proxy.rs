@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use crate::cache::ToolResultCache;
 use crate::client::McpClient;
+use crate::pool::McpServerPool;
 use crate::protocol::McpToolDef;
 
 /// Events emitted during MCP tool call execution for observability.

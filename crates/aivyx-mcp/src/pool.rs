@@ -152,6 +152,81 @@ impl McpServerPool {
             entry.health = McpServerHealth::Connected;
         }
     }
+
+    /// Attempt to reconnect to a disconnected MCP server with exponential backoff.
+    ///
+    /// On success, replaces the old client in the pool and returns the new client.
+    /// On failure after all attempts, marks the server as [`McpServerHealth::Disconnected`].
+    pub async fn reconnect(&self, server_name: &str) -> aivyx_core::Result<Arc<McpClient>> {
+        let config = self.get_config(server_name).await.ok_or_else(|| {
+            aivyx_core::AivyxError::Other(format!("unknown MCP server: {server_name}"))
+        })?;
+
+        let max_attempts = config.max_reconnect_attempts;
+        let base_delay = config.reconnect_backoff_ms;
+
+        for attempt in 1..=max_attempts {
+            self.set_health(
+                server_name,
+                McpServerHealth::Reconnecting {
+                    attempt,
+                    since: chrono::Utc::now(),
+                },
+            )
+            .await;
+
+            tracing::info!(
+                "Reconnecting to MCP '{}' (attempt {}/{})",
+                server_name,
+                attempt,
+                max_attempts
+            );
+
+            match McpClient::connect(&config).await {
+                Ok(client) => {
+                    let client = Arc::new(client);
+                    match client.initialize().await {
+                        Ok(()) => {
+                            self.replace_client(server_name, client.clone()).await;
+                            tracing::info!("MCP '{}' reconnected successfully", server_name);
+                            return Ok(client);
+                        }
+                        Err(e) => {
+                            tracing::warn!("MCP '{}' reconnect init failed: {e}", server_name);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "MCP '{}' reconnect attempt {}/{} failed: {e}",
+                        server_name,
+                        attempt,
+                        max_attempts
+                    );
+                }
+            }
+
+            // Exponential backoff: base * 2^(attempt-1)
+            let delay =
+                std::time::Duration::from_millis(base_delay.saturating_mul(1u64 << (attempt - 1)));
+            tokio::time::sleep(delay).await;
+        }
+
+        // Mark as disconnected after all attempts failed.
+        self.set_health(
+            server_name,
+            McpServerHealth::Disconnected {
+                since: chrono::Utc::now(),
+                reason: format!("reconnection failed after {} attempts", max_attempts),
+            },
+        )
+        .await;
+
+        Err(aivyx_core::AivyxError::Other(format!(
+            "MCP '{}' reconnection failed after {} attempts",
+            server_name, max_attempts
+        )))
+    }
 }
 
 impl Default for McpServerPool {
@@ -211,6 +286,8 @@ mod tests {
             timeout_secs: 30,
             allowed_tools: None,
             blocked_tools: None,
+            max_reconnect_attempts: 3,
+            reconnect_backoff_ms: 1000,
         }
     }
 

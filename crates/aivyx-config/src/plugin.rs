@@ -81,6 +81,8 @@ mod tests {
                 timeout_secs: 30,
                 allowed_tools: None,
                 blocked_tools: None,
+                max_reconnect_attempts: 3,
+                reconnect_backoff_ms: 1000,
             },
             installed_at: Utc::now(),
             enabled: true,
