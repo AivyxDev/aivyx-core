@@ -27,6 +27,8 @@ pub mod persona;
 pub mod plugin_tools;
 pub mod profile;
 pub mod rate_limiter;
+#[cfg(feature = "memory")]
+pub mod reflection;
 pub mod sanitize;
 pub mod search_tools;
 pub mod self_tools;

@@ -66,9 +66,10 @@ impl OutcomeRecord {
         agent_name: String,
         goal_context: String,
     ) -> Self {
-        // Truncate result summary to 500 chars.
+        // Truncate result summary to 500 chars (UTF-8 safe).
         let summary = if result_summary.len() > 500 {
-            format!("{}...", &result_summary[..497])
+            let boundary = result_summary.floor_char_boundary(497);
+            format!("{}...", &result_summary[..boundary])
         } else {
             result_summary
         };

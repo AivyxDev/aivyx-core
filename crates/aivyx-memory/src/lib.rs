@@ -18,7 +18,7 @@ pub mod store;
 pub mod tools;
 pub mod types;
 
-pub use consolidation::{ConsolidationConfig, ConsolidationReport};
+pub use consolidation::{ConsolidationConfig, ConsolidationReport, consolidate};
 pub use graph::{Community, GraphEdge, GraphPath, KnowledgeGraph, Neighborhood};
 pub use manager::{MemoryManager, MemoryStats};
 pub use notification::{Notification, NotificationStore, Rating};

@@ -76,6 +76,29 @@ pub struct HeartbeatConfig {
     #[serde(default)]
     pub can_consolidate_memory: bool,
 
+    // ── Outcome & consolidation ───────────────────────────────────
+    /// Include recent outcome statistics (tool success rates, failure counts)
+    /// in the heartbeat context for the agent to reason about.
+    #[serde(default = "default_true")]
+    pub check_outcomes: bool,
+
+    /// Automatically trigger memory consolidation when the memory store
+    /// exceeds this many entries. Set to `0` to disable threshold-based
+    /// consolidation (the agent can still request it explicitly).
+    #[serde(default = "default_consolidation_threshold")]
+    pub consolidation_threshold: usize,
+
+    // ── Mission monitoring ────────────────────────────────────────
+    /// Monitor active missions and surface stalled or failed ones in
+    /// the heartbeat context. The agent can then resume or escalate them.
+    #[serde(default)]
+    pub check_missions: bool,
+
+    /// Minutes after which an executing mission is considered stalled.
+    /// Only relevant when `check_missions` is `true`.
+    #[serde(default = "default_mission_stall_minutes")]
+    pub mission_stall_minutes: u64,
+
     // ── Runtime state ───────────────────────────────────────────────
     /// Timestamp of the last heartbeat tick (set by the runtime).
     #[serde(default)]
@@ -94,6 +117,14 @@ fn default_true() -> bool {
     true
 }
 
+fn default_consolidation_threshold() -> usize {
+    200
+}
+
+fn default_mission_stall_minutes() -> u64 {
+    60
+}
+
 impl Default for HeartbeatConfig {
     fn default() -> Self {
         Self {
@@ -107,6 +138,10 @@ impl Default for HeartbeatConfig {
             can_send_channel_messages: false,
             can_store_notifications: true,
             can_consolidate_memory: false,
+            check_outcomes: true,
+            consolidation_threshold: default_consolidation_threshold(),
+            check_missions: false,
+            mission_stall_minutes: default_mission_stall_minutes(),
             last_beat_at: None,
         }
     }
@@ -129,6 +164,10 @@ mod tests {
         assert!(!hb.can_send_channel_messages);
         assert!(hb.can_store_notifications);
         assert!(!hb.can_consolidate_memory);
+        assert!(hb.check_outcomes);
+        assert_eq!(hb.consolidation_threshold, 200);
+        assert!(!hb.check_missions);
+        assert_eq!(hb.mission_stall_minutes, 60);
         assert!(hb.last_beat_at.is_none());
     }
 
@@ -192,5 +231,37 @@ can_send_channel_messages = true
         let parsed: HeartbeatConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.interval_minutes, hb.interval_minutes);
         assert_eq!(parsed.agent, hb.agent);
+    }
+
+    #[test]
+    fn deserialize_with_missions_and_outcomes() {
+        let toml_str = r#"
+enabled = true
+check_outcomes = true
+check_missions = true
+mission_stall_minutes = 45
+consolidation_threshold = 100
+can_consolidate_memory = true
+"#;
+        let parsed: HeartbeatConfig = toml::from_str(toml_str).unwrap();
+        assert!(parsed.check_outcomes);
+        assert!(parsed.check_missions);
+        assert_eq!(parsed.mission_stall_minutes, 45);
+        assert_eq!(parsed.consolidation_threshold, 100);
+        assert!(parsed.can_consolidate_memory);
+    }
+
+    #[test]
+    fn backward_compat_no_new_fields() {
+        // Existing config without new fields should still parse with defaults.
+        let toml_str = r#"
+enabled = true
+interval_minutes = 15
+"#;
+        let parsed: HeartbeatConfig = toml::from_str(toml_str).unwrap();
+        assert!(parsed.check_outcomes); // default true
+        assert!(!parsed.check_missions); // default false
+        assert_eq!(parsed.consolidation_threshold, 200); // default
+        assert_eq!(parsed.mission_stall_minutes, 60); // default
     }
 }

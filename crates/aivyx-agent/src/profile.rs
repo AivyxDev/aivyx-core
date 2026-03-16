@@ -430,6 +430,14 @@ fn default_capabilities() -> Vec<ProfileCapability> {
             scope: CapabilityScope::Custom("plugin".to_string()),
             pattern: "*".to_string(),
         },
+        ProfileCapability {
+            scope: CapabilityScope::Custom("missions".to_string()),
+            pattern: "*".to_string(),
+        },
+        ProfileCapability {
+            scope: CapabilityScope::Custom("coordination".to_string()),
+            pattern: "*".to_string(),
+        },
     ]
 }
 

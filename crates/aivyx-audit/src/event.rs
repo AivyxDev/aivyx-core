@@ -642,6 +642,59 @@ pub enum AuditEvent {
         /// Human-readable details.
         details: String,
     },
+    /// Tool execution outcomes were recorded for the pattern mining pipeline.
+    TurnOutcomeRecorded {
+        /// Agent that recorded the outcomes.
+        agent_id: aivyx_core::AgentId,
+        /// Number of tools called during the turn.
+        tool_count: usize,
+        /// Whether all tool calls succeeded.
+        success: bool,
+        /// When the outcomes were recorded.
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+    /// Memory consolidation was triggered (by heartbeat, threshold, or manually).
+    ConsolidationTriggered {
+        /// What triggered it: "heartbeat", "threshold", or "manual".
+        source: String,
+        /// When it was triggered.
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+    /// A mission was created by an agent (self-directed).
+    MissionCreatedByAgent {
+        /// Agent that created the mission.
+        agent_id: aivyx_core::AgentId,
+        /// Mission ID.
+        task_id: aivyx_core::TaskId,
+        /// Goal description.
+        goal: String,
+        /// When the mission was created.
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+    /// An agent performed a mission control action (pause/resume/cancel).
+    MissionControlledByAgent {
+        /// Agent that performed the action.
+        agent_id: aivyx_core::AgentId,
+        /// Mission ID.
+        task_id: aivyx_core::TaskId,
+        /// Action performed: "pause", "resume", or "cancel".
+        action: String,
+        /// When the action was performed.
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+    /// An agent delegated a task to a Nonagon team.
+    TeamDelegatedByAgent {
+        /// Agent that initiated the delegation.
+        agent_id: aivyx_core::AgentId,
+        /// Team used for the delegation.
+        team_name: String,
+        /// Task description.
+        task: String,
+        /// Whether the delegation succeeded.
+        success: bool,
+        /// When the delegation occurred.
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
     /// A bearer token was generated via passphrase exchange.
     TokenGenerated {
         /// Method used to generate the token (e.g., "passphrase_exchange").

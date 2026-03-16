@@ -31,6 +31,18 @@ enum TurnOutcome {
     Continue,
 }
 
+/// A single tool execution record accumulated during a turn.
+///
+/// Collected by `execute_single_tool()` and flushed to the `MemoryManager`
+/// as an `OutcomeRecord` at the end of the turn, feeding the pattern mining
+/// pipeline.
+#[cfg(feature = "memory")]
+struct ToolOutcomeEntry {
+    tool_name: String,
+    success: bool,
+    duration_ms: u64,
+}
+
 /// A single AI agent instance capable of multi-turn conversation.
 pub struct Agent {
     pub id: AgentId,
@@ -78,6 +90,11 @@ pub struct Agent {
     /// that gives the agent innate community participation behavior with
     /// data-sharing guardrails.
     nexus_data_policy: Option<aivyx_config::NexusDataPolicy>,
+    /// Tool execution log accumulated during the current turn.
+    /// Flushed to `MemoryManager` as an `OutcomeRecord` at the end of each turn,
+    /// feeding the pattern mining pipeline for self-learning.
+    #[cfg(feature = "memory")]
+    turn_tool_log: Vec<ToolOutcomeEntry>,
 }
 
 impl Agent {
@@ -125,6 +142,8 @@ impl Agent {
             #[cfg(feature = "mcp")]
             mcp_pool: None,
             nexus_data_policy: None,
+            #[cfg(feature = "memory")]
+            turn_tool_log: Vec::new(),
         }
     }
 
@@ -250,6 +269,9 @@ impl Agent {
             .as_ref()
             .map(Self::nexus_context_block);
 
+        // Self-evolution guidance (injected when agent has self-improvement capability).
+        let evolution_block = self.self_evolution_block();
+
         // With memory: add profile, memory recall, triples, and notifications.
         #[cfg(feature = "memory")]
         if let Some(ref mgr) = self.memory_manager {
@@ -303,6 +325,7 @@ impl Agent {
                     memory_block,
                     skills_block,
                     nexus_block,
+                    evolution_block,
                     notification_block,
                 ],
             );
@@ -311,7 +334,13 @@ impl Agent {
         // Without memory feature — assemble with available context blocks.
         Self::assemble_prompt(
             &self.system_prompt,
-            &[team_block, project_block, skills_block, nexus_block],
+            &[
+                team_block,
+                project_block,
+                skills_block,
+                nexus_block,
+                evolution_block,
+            ],
         )
     }
 
@@ -357,6 +386,35 @@ impl Agent {
              than many superficial ones. Be a genuine community participant, not a spammer.\n\
              [END NEXUS CONTEXT]",
             policy.guidance()
+        )
+    }
+
+    /// Generate the `[SELF-EVOLUTION]` system prompt block.
+    ///
+    /// Injected when the agent has the `self-improvement` capability scope,
+    /// this gives the agent guidance on when and how to use its self-modification
+    /// tools (`self_profile`, `self_update`, `skill_create`, `self_reflect`).
+    fn self_evolution_block(&self) -> Option<String> {
+        let principal = Principal::Agent(self.id);
+        let scope = CapabilityScope::Custom("self-improvement".to_string());
+        if self.capabilities.check(&principal, &scope, "read").is_err() {
+            return None;
+        }
+
+        Some(
+            "[SELF-EVOLUTION]\n\
+             You are a self-evolving agent. Use your self-improvement tools strategically:\n\
+             - After completing complex tasks, review your profile with `self_profile` and \
+             consider updating your soul or role via `self_update` to reflect growing expertise.\n\
+             - When you discover repeatable multi-step workflows, crystallize them into reusable \
+             skills with `skill_create`.\n\
+             - If you consistently struggle with a task type, honestly adjust your persona \
+             dimensions (confidence, curiosity) to match your actual capabilities.\n\
+             - When `self_reflect` is available, use it periodically to review your outcome \
+             patterns and identify areas for improvement.\n\
+             - Never change your name, autonomy tier, or capabilities — those are user-controlled.\n\
+             [END SELF-EVOLUTION]"
+                .to_string(),
         )
     }
 
@@ -620,6 +678,7 @@ impl Agent {
                 {
                     self.pending_notifications.clear();
                     self.post_turn_extract().await;
+                    self.record_turn_outcomes();
                 }
                 Ok(TurnOutcome::Done(content))
             }
@@ -632,6 +691,7 @@ impl Agent {
                 {
                     self.pending_notifications.clear();
                     self.post_turn_extract().await;
+                    self.record_turn_outcomes();
                 }
                 Ok(TurnOutcome::Done(content))
             }
@@ -892,6 +952,7 @@ impl Agent {
 
         // Execute
         info!("Agent {} executing tool '{}'", self.name, tc.name);
+        let tool_start = std::time::Instant::now();
         let (result, denied) = match tool.execute(tc.arguments.clone()).await {
             Ok(output) => {
                 self.audit_event(AuditEvent::ToolExecuted {
@@ -948,6 +1009,16 @@ impl Agent {
                     details,
                 });
             }
+        }
+
+        // Record tool outcome for pattern mining (feeds self-learning pipeline).
+        #[cfg(feature = "memory")]
+        {
+            self.turn_tool_log.push(ToolOutcomeEntry {
+                tool_name: tc.name.clone(),
+                success: !result.is_error,
+                duration_ms: tool_start.elapsed().as_millis() as u64,
+            });
         }
 
         result
@@ -1280,6 +1351,79 @@ impl Agent {
                 debug!("Memory extraction failed (non-fatal): {e}");
             }
         }
+    }
+
+    /// Record accumulated tool outcomes as an `OutcomeRecord` in the memory
+    /// manager, then clear the log. This feeds the pattern mining pipeline
+    /// that discovers reusable workflow patterns from tool call sequences.
+    #[cfg(feature = "memory")]
+    fn record_turn_outcomes(&mut self) {
+        if self.turn_tool_log.is_empty() {
+            return;
+        }
+        let mgr = match self.memory_manager {
+            Some(ref mgr) => mgr.clone(),
+            None => {
+                self.turn_tool_log.clear();
+                return;
+            }
+        };
+
+        let tools_used: Vec<String> = self
+            .turn_tool_log
+            .iter()
+            .map(|e| e.tool_name.clone())
+            .collect();
+        let all_success = self.turn_tool_log.iter().all(|e| e.success);
+        let total_duration: u64 = self.turn_tool_log.iter().map(|e| e.duration_ms).sum();
+        let tool_count = self.turn_tool_log.len();
+
+        // Goal context: extract from the last user message in conversation.
+        let goal_context = self
+            .conversation
+            .iter()
+            .rev()
+            .find(|m| m.role == aivyx_llm::Role::User)
+            .map(|m| {
+                let text = m.content.text();
+                if text.len() > 200 {
+                    let boundary = text.floor_char_boundary(200);
+                    format!("{}...", &text[..boundary])
+                } else {
+                    text.to_string()
+                }
+            })
+            .unwrap_or_default();
+
+        let primary_tool = tools_used.first().cloned().unwrap_or_default();
+        let summary = format!("{tool_count} tool call(s): {}", tools_used.join(", "));
+        let record = aivyx_memory::OutcomeRecord::new(
+            aivyx_memory::OutcomeSource::ToolCall {
+                tool_name: primary_tool,
+            },
+            all_success,
+            summary,
+            total_duration,
+            self.name.clone(),
+            goal_context,
+        )
+        .with_tools(tools_used);
+
+        // record_outcome takes &self — no exclusive lock needed.
+        if let Ok(mm) = mgr.try_lock() {
+            if let Err(e) = mm.record_outcome(&record) {
+                debug!("Failed to record turn outcomes: {e}");
+            } else {
+                self.audit_event(AuditEvent::TurnOutcomeRecorded {
+                    agent_id: self.id,
+                    tool_count,
+                    success: all_success,
+                    timestamp: chrono::Utc::now(),
+                });
+            }
+        }
+
+        self.turn_tool_log.clear();
     }
 }
 
@@ -2195,5 +2339,93 @@ mod tests {
 
         agent.set_autonomy_tier(AutonomyTier::Free);
         assert_eq!(agent.autonomy_tier(), AutonomyTier::Free);
+    }
+
+    #[test]
+    fn self_evolution_block_with_capability() {
+        let response = ChatResponse {
+            message: ChatMessage::assistant("ok"),
+            usage: TokenUsage {
+                input_tokens: 1,
+                output_tokens: 1,
+            },
+            stop_reason: StopReason::EndTurn,
+        };
+
+        let agent_id = AgentId::new();
+        let mut caps = CapabilitySet::new();
+        caps.grant(aivyx_capability::Capability {
+            id: CapabilityId::new(),
+            scope: CapabilityScope::Custom("self-improvement".to_string()),
+            pattern: ActionPattern::new("*").unwrap(),
+            granted_to: vec![Principal::Agent(agent_id)],
+            granted_by: Principal::System,
+            created_at: Utc::now(),
+            expires_at: None,
+            revoked: false,
+            parent_id: None,
+        });
+
+        let agent = Agent::new(
+            agent_id,
+            "test".into(),
+            "Test".into(),
+            4096,
+            AutonomyTier::Trust,
+            Box::new(MockProvider { response }),
+            ToolRegistry::new(),
+            caps,
+            RateLimiter::new(60),
+            CostTracker::new(5.0, 0.000003, 0.000015),
+            None,
+            3,
+            1000,
+        );
+        let block = agent.self_evolution_block();
+        assert!(
+            block.is_some(),
+            "agent with self-improvement capability should get evolution block"
+        );
+        let text = block.unwrap();
+        assert!(text.contains("[SELF-EVOLUTION]"));
+        assert!(text.contains("self_profile"));
+        assert!(text.contains("self_update"));
+        assert!(text.contains("skill_create"));
+        assert!(text.contains("self_reflect"));
+        assert!(text.contains("[END SELF-EVOLUTION]"));
+    }
+
+    #[test]
+    fn self_evolution_block_without_capability() {
+        let response = ChatResponse {
+            message: ChatMessage::assistant("ok"),
+            usage: TokenUsage {
+                input_tokens: 1,
+                output_tokens: 1,
+            },
+            stop_reason: StopReason::EndTurn,
+        };
+
+        // Create agent with empty capability set (no self-improvement)
+        let agent = Agent::new(
+            AgentId::new(),
+            "test".into(),
+            "Test".into(),
+            4096,
+            AutonomyTier::Trust,
+            Box::new(MockProvider { response }),
+            ToolRegistry::new(),
+            CapabilitySet::new(), // Empty — no self-improvement capability
+            RateLimiter::new(60),
+            CostTracker::new(5.0, 0.000003, 0.000015),
+            None,
+            3,
+            1000,
+        );
+        let block = agent.self_evolution_block();
+        assert!(
+            block.is_none(),
+            "agent without self-improvement capability should NOT get evolution block"
+        );
     }
 }

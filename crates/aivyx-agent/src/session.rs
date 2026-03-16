@@ -527,7 +527,10 @@ impl AgentSession {
             agent.set_mcp_pool(pool);
         }
 
-        // Set the memory manager on the agent for runtime memory retrieval
+        // Set the memory manager on the agent for runtime memory retrieval.
+        // Clone the Arc before moving so we can also use it for the SelfReflectTool.
+        #[cfg(feature = "memory")]
+        let memory_for_reflection = memory_manager.as_ref().map(std::sync::Arc::clone);
         #[cfg(feature = "memory")]
         if let Some(mgr) = memory_manager {
             agent.set_memory_manager(mgr);
@@ -548,6 +551,15 @@ impl AgentSession {
             profile.name.clone(),
             Some(AuditLog::new(self.dirs.audit_path(), &audit_key)),
         )));
+
+        // Self-reflection tool — needs memory manager for outcome/pattern queries.
+        #[cfg(feature = "memory")]
+        if let Some(mm) = memory_for_reflection {
+            agent.register_tool(Box::new(crate::reflection::SelfReflectTool::new(
+                mm,
+                profile.name.clone(),
+            )));
+        }
 
         // Discover SKILL.md skills from user-global directory.
         {
